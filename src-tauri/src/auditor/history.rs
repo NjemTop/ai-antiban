@@ -15,18 +15,18 @@ pub fn evaluate_ip_pinning(
         match pinned_ip {
             Some(pinned) if pinned.trim() == current_ip => CheckResult::ok(
                 "PINNED_IP_MATCH",
-                format!("Traffic routed through your verified pinned VPS ({current_ip})."),
+                format!("Трафик идет через ваш закрепленный личный VPS ({current_ip})."),
             ),
             Some(pinned) => CheckResult::critical(
                 "PINNED_IP_MISMATCH",
                 format!(
-                    "Strict Pinning violation: traffic is routing via {current_ip}, but your pinned VPS server is {pinned}. Connection blocked to prevent account ban.",
+                    "Нарушение Strict Pinning: текущий IP ({current_ip}) не совпадает с вашим закрепленным VPS ({pinned}). Запрос заблокирован для защиты аккаунта.",
                 ),
                 Some(GUIDE_PERSONAL_VPN.to_string()),
             ),
             None => CheckResult::warning(
                 "PINNED_IP_NOT_CONFIGURED",
-                "Strict IP Pinning is active, but no pinned VPS IP is set. Click 'Pin VPS' to lock your current safe IP.",
+                "Строгая привязка IP активна, но эталонный VPS не задан. Нажмите «Закрепить IP», чтобы зафиксировать безопасный сервер.",
                 Some(GUIDE_PERSONAL_VPN.to_string()),
             ),
         }
@@ -34,11 +34,11 @@ pub fn evaluate_ip_pinning(
         match pinned_ip {
             Some(pinned) if pinned.trim() == current_ip => CheckResult::ok(
                 "PINNED_IP_MATCH",
-                format!("Connected via verified pinned VPS ({current_ip})."),
+                format!("Подключено через закрепленный личный VPS ({current_ip})."),
             ),
             _ => CheckResult::ok(
                 "STRICT_PINNING_DISABLED",
-                "Strict IP Pinning is disabled. Traffic allowed.",
+                "Строгая привязка IP отключена (консультативный режим).",
             ),
         }
     }
@@ -59,7 +59,7 @@ pub fn evaluate_impossible_travel(
         None => {
             return CheckResult::ok(
                 "HISTORY_CLEAN",
-                "First session recorded for this provider. No travel anomalies detected.",
+                "Первая сессия для этого провайдера. Аномалий перемещения нет.",
             );
         }
     };
@@ -73,13 +73,13 @@ pub fn evaluate_impossible_travel(
             let elapsed_mins = (elapsed_secs % 3600) / 60;
 
             let time_str = if elapsed_hours > 0 {
-                format!("{elapsed_hours}h {elapsed_mins}m")
+                format!("{elapsed_hours}ч {elapsed_mins}м")
             } else {
-                format!("{elapsed_mins}m")
+                format!("{elapsed_mins}м")
             };
 
             let msg = format!(
-                "Impossible Travel detected: location jumped from {prev_country} to {current_country} in {time_str}. Claude and AI antifraud systems flag rapid country changes as account sharing or VPN hopping.",
+                "Аномалия Impossible Travel: резкая смена страны ({prev_country} -> {current_country}) за {time_str} ({prev_country} to {current_country}). Антифрод Claude банит за прыжки между странами.",
             );
 
             // Anthropic is especially strict on rapid location hops
@@ -101,7 +101,7 @@ pub fn evaluate_impossible_travel(
 
     CheckResult::ok(
         "TRAVEL_NORMAL",
-        "Geographical travel velocity is within safe limits.",
+        "География сессий стабильна (без резких смен локации за 12ч).",
     )
 }
 

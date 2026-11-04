@@ -3,9 +3,12 @@ import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "@tauri-apps/api/core";
 import {
   AlertOctagon,
+  AlertTriangle,
   ArrowRight,
   ShieldX,
   Clock,
+  Zap,
+  CheckCircle2,
 } from "lucide-react";
 import { InterceptionAction, RiskInterceptPayload } from "../types";
 import { resolveInterception } from "../utils/api";
@@ -31,44 +34,49 @@ const DEFAULT_PAYLOAD: RiskInterceptPayload = {
     geo_result: {
       status: "critical",
       code: "GEO_HIGH_RISK_TR",
-      message: "Turkey (TR): High fraud score for Claude, restricted for Gemini.",
+      message:
+        "Локация Турция (TR): высокий фрод-скор для Claude, полная блокировка для Google Gemini.",
       guide_ref: "01-personal-vpn-15min",
     },
     pinning_result: {
       status: "warning",
       code: "PINNED_IP_NOT_CONFIGURED",
-      message: "Strict Pinning disabled. Traffic routing via unpinned commercial IP.",
+      message:
+        "Трафик идет НЕ через закрепленный VPS. Обнаружен публичный коммерческий пул.",
       guide_ref: "01-personal-vpn-15min",
     },
     travel_result: {
       status: "ok",
       code: "TRAVEL_NORMAL",
-      message: "No previous travel conflict.",
+      message: "Конфликтов перемещения за 12ч нет.",
       guide_ref: null,
     },
     dnsbl_result: {
       status: "warning",
       code: "DNSBL_LISTED",
-      message: "Listed in DroneBL / AS9009 (M247 Shared Pool - 400+ users on IP).",
+      message:
+        "IP числится в спам-базе DroneBL / AS9009 (M247 Shared VPN — 400+ соседей на узле).",
       guide_ref: "01-personal-vpn-15min",
     },
-    dnsbl_clean_count: "1/4 Listed",
+    dnsbl_clean_count: "1/4 В базе",
     asn_result: {
       status: "warning",
       code: "ASN_SHARED_VPN",
-      message: "AS9009 (M247) belongs to known shared commercial VPN network.",
+      message:
+        "Подсеть AS9009 (M247) принадлежит массовому коммерческому VPN.",
       guide_ref: "01-personal-vpn-15min",
     },
     ipv6_result: {
       status: "ok",
       code: "IPV6_SAFE",
-      message: "No IPv6 dual-stack leak.",
+      message: "Утечек по протоколу IPv6 не обнаружено.",
       guide_ref: null,
     },
     timezone_result: {
       status: "warning",
       code: "TIMEZONE_MISMATCH",
-      message: "system_tz: Europe/Moscow != ip_tz: Europe/Istanbul",
+      message:
+        "Часовой пояс ОС (Europe/Moscow) выдает реальную локацию (IP: Europe/Istanbul).",
       guide_ref: "03-os-privacy-setup",
     },
     checks: [],
@@ -77,7 +85,7 @@ const DEFAULT_PAYLOAD: RiskInterceptPayload = {
 
 interface AlertPopupProps {
   initialPayload?: RiskInterceptPayload;
-  onResolved?: () => void;
+  onResolved?: (action?: InterceptionAction) => void;
 }
 
 export const AlertPopup: React.FC<AlertPopupProps> = ({
@@ -92,7 +100,6 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
   );
   const [resolving, setResolving] = useState<boolean>(false);
 
-  // Listen for interceptor event from Rust backend
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;
 
@@ -111,7 +118,7 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
           ...DEFAULT_PAYLOAD,
           id: e.detail.id || "sim-" + Date.now(),
           provider: e.detail.provider || "anthropic",
-          host: e.detail.host || "api.anthropic.com:443",
+          host: e.detail.host || "api.anthropic.com:443 (Claude Desktop)",
         });
         setSecondsRemaining(60);
       }
@@ -124,10 +131,8 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
     };
   }, []);
 
-  // Countdown timer
   useEffect(() => {
     if (secondsRemaining <= 0) {
-      // Auto-block on timeout to protect account
       handleAction("BlockUntilNetworkChange");
       return;
     }
@@ -145,7 +150,7 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
 
     try {
       await resolveInterception(payload.id, action, payload.provider);
-      if (onResolved) onResolved();
+      if (onResolved) onResolved(action);
     } catch (err) {
       console.error("Failed to resolve interception:", err);
     } finally {
@@ -153,7 +158,6 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
     }
   };
 
-  // Keyboard ergonomics: 1, 2, 3 or Esc
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "1") {
@@ -175,115 +179,127 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
   const { report } = payload;
 
   return (
-    <div className="w-[480px] h-[440px] max-h-screen bg-[#0A0B0E] text-zinc-100 flex flex-col justify-between border-t-2 border-rose-500 p-4 select-none overflow-hidden font-mono shadow-2xl">
+    <div className="w-[480px] h-[440px] max-h-screen bg-[#0A0B0E] text-zinc-100 flex flex-col justify-between border border-white/[0.1] border-t-2 border-t-rose-500 rounded-xl p-4 select-none overflow-hidden shadow-2xl">
       {/* Header Bar */}
       <div>
-        <div className="flex items-center justify-between pb-2 border-b border-white/[0.08]">
+        <div className="flex items-center justify-between pb-2.5 border-b border-white/[0.08]">
           <div className="flex items-center gap-2">
             <span className="relative flex h-2.5 w-2.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500" />
             </span>
-            <span className="text-xs font-bold uppercase tracking-wider text-rose-400">
-              INTERCEPTED REQUEST
+            <span className="text-xs font-bold uppercase tracking-wider text-rose-400 font-sans">
+              ПЕРЕХВАТ ОПАСНОГО ЗАПРОСА
             </span>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="text-[10px] text-zinc-400 tracking-wider">
-              HOLDING PACKET...
+            <span className="text-[10px] font-mono text-zinc-400 tracking-wider">
+              ПАКЕТ НА ПАУЗЕ
             </span>
-            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-500/10 border border-rose-500/20 text-rose-300 text-[10px] font-bold tabular-nums">
-              <Clock className="w-3 h-3 text-rose-400" />
-              <span>{secondsRemaining}s</span>
+            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[10px] font-mono font-bold tabular-nums">
+              <Clock className="w-3 h-3 text-rose-400" strokeWidth={1.75} />
+              <span>{secondsRemaining}с</span>
             </div>
           </div>
         </div>
 
         {/* Target Info */}
-        <div className="mt-2.5 flex items-center justify-between text-xs px-0.5">
-          <div className="flex items-center gap-1.5 truncate">
-            <span className="text-zinc-500">Target:</span>
-            <span className="text-zinc-200 font-semibold truncate">
+        <div className="mt-2.5 flex items-center justify-between text-xs bg-[#12141A] px-2.5 py-1.5 rounded-lg border border-white/[0.06]">
+          <div className="flex items-center gap-2 truncate">
+            <span className="text-[10px] font-sans uppercase tracking-wider text-zinc-500 font-semibold">
+              Цель:
+            </span>
+            <span className="text-zinc-100 font-mono text-[11.5px] font-semibold truncate">
               {payload.host}
             </span>
           </div>
-          <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-white/[0.06] text-[10px] uppercase text-zinc-400 shrink-0">
-            {payload.provider}
-          </span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[10px] font-mono text-zinc-400">
+              IP: {report.telemetry.ip} ({report.telemetry.country_code})
+            </span>
+            <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-white/[0.08] text-[9.5px] font-mono uppercase text-amber-400 font-semibold">
+              {payload.provider}
+            </span>
+          </div>
         </div>
 
         {/* Advisory Subtitle */}
-        <div className="mt-2 text-[11px] text-zinc-400 leading-snug">
-          Запрос заморожен до отправки. Обнаружены факторы блокировки аккаунта:
+        <div className="mt-2 text-[11px] font-sans text-zinc-400 leading-snug">
+          Соединение заморожено до отправки на сервер ИИ. Выявлены триггеры блокировки аккаунта:
         </div>
 
         {/* Risk Trigger Items */}
         <div className="mt-2 space-y-1.5">
           {/* Item 1: Geo / Travel */}
-          <div className="bg-[#12141A] rounded p-2 border border-rose-500/30 text-xs space-y-0.5">
+          <div className="bg-[#12141A] rounded-lg p-2 border border-rose-500/30 space-y-0.5">
             <div className="flex items-center justify-between text-[10px]">
-              <span className="text-rose-400 font-bold flex items-center gap-1">
-                <AlertOctagon className="w-3 h-3" /> [CRITICAL] Geo / Travel Anomaly
+              <span className="text-rose-400 font-bold font-sans flex items-center gap-1">
+                <AlertOctagon className="w-3 h-3" strokeWidth={1.75} />
+                <span>[КРИТИЧНО] Гео-матрица / Юрисдикция IP</span>
               </span>
-              <span className="text-zinc-500">{report.telemetry.country_code}</span>
+              <span className="font-mono text-rose-300 font-semibold">
+                {report.telemetry.country_code} · Траст {report.trust_score}%
+              </span>
             </div>
-            <div className="text-[11px] text-zinc-300">
-              {report.geo_result.message ||
-                `country_code: ${report.telemetry.country_code} -> Banned / High Fraud Score`}
+            <div className="text-[11px] font-sans text-zinc-200 leading-snug line-clamp-2">
+              {report.geo_result.message}
             </div>
           </div>
 
           {/* Item 2: DNSBL / Spam */}
-          <div className="bg-[#12141A] rounded p-2 border border-amber-500/25 text-xs space-y-0.5">
+          <div className="bg-[#12141A] rounded-lg p-2 border border-amber-500/25 space-y-0.5">
             <div className="flex items-center justify-between text-[10px]">
-              <span className="text-amber-400 font-bold">
-                [WARNING] Spam & Shared VPN Database (DNSBL)
+              <span className="text-amber-400 font-bold font-sans flex items-center gap-1">
+                <AlertTriangle className="w-3 h-3" strokeWidth={1.75} />
+                <span>[РИСК] Спам-базы DNSBL и публичный пул ASN</span>
               </span>
-              <span className="text-zinc-500">
-                {report.telemetry.asn ? `AS${report.telemetry.asn}` : "AS9009"}
+              <span className="font-mono text-zinc-400">
+                {report.telemetry.asn ? `AS${report.telemetry.asn}` : "AS9009"} · {report.dnsbl_clean_count}
               </span>
             </div>
-            <div className="text-[11px] text-zinc-300 truncate">
-              {report.dnsbl_result.message ||
-                "Listed in DroneBL / Shared commercial VPN IP pool"}
+            <div className="text-[11px] font-sans text-zinc-300 truncate">
+              {report.dnsbl_result.status !== "ok"
+                ? report.dnsbl_result.message
+                : report.asn_result.message}
             </div>
           </div>
 
           {/* Item 3: Environment / Timezone */}
-          <div className="bg-[#12141A] rounded p-2 border border-white/[0.06] text-xs space-y-0.5">
+          <div className="bg-[#12141A] rounded-lg p-2 border border-white/[0.07] space-y-0.5">
             <div className="flex items-center justify-between text-[10px]">
-              <span className="text-zinc-400 font-bold">
-                [WARNING] Environment Mismatch
+              <span className="text-zinc-300 font-semibold font-sans flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3 text-amber-400" strokeWidth={1.75} />
+                <span>[СРЕДА ОС] Часовой пояс и привязка VPS</span>
               </span>
-              <span className="text-zinc-500">TZ Check</span>
+              <span className="font-mono text-zinc-500">Контроль утечек</span>
             </div>
-            <div className="text-[11px] text-zinc-300 truncate">
-              {report.timezone_result.message ||
-                "system_tz != ip_tz (Timezone location leak detected)"}
+            <div className="text-[11px] font-sans text-zinc-400 truncate">
+              {report.timezone_result.message}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Action Buttons (3 Actions) */}
+      {/* Action Buttons (3 Actions strictly per spec) */}
       <div className="space-y-2 pt-2 border-t border-white/[0.08]">
-        <div className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">
-          ВЫБЕРИТЕ ДЕЙСТВИЕ:
+        <div className="flex items-center justify-between text-[10px] font-sans text-zinc-500 uppercase tracking-wider font-semibold">
+          <span>ВЫБЕРИТЕ ДЕЙСТВИЕ (ГОРЯЧИЕ КЛАВИШИ 1 · 2 · 3):</span>
+          <span className="font-mono text-[9.5px] text-zinc-600">Zero-MITM Hold</span>
         </div>
 
-        {/* Primary Action Button */}
+        {/* Action 1: Primary Solution Guide */}
         <button
           type="button"
           disabled={resolving}
           onClick={() => handleAction("OpenGuideAndBlock")}
-          className="w-full py-2.5 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold text-xs flex items-center justify-between transition-all shadow-lg shadow-emerald-500/10 cursor-pointer disabled:opacity-50"
+          className="w-full py-2.5 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-sans font-bold text-xs flex items-center justify-between transition-all shadow-lg shadow-emerald-500/15 cursor-pointer disabled:opacity-50"
         >
           <div className="flex items-center gap-2">
-            <span>⚡</span>
+            <Zap className="w-4 h-4 fill-zinc-950 shrink-0" strokeWidth={2} />
             <span>1. Инструкция по решению (Свой чистый VPN за 15 мин)</span>
           </div>
-          <ArrowRight className="w-4 h-4 shrink-0" />
+          <ArrowRight className="w-4 h-4 shrink-0" strokeWidth={2} />
         </button>
 
         {/* Secondary Action Buttons Grid */}
@@ -293,10 +309,10 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
             type="button"
             disabled={resolving}
             onClick={() => handleAction("BlockUntilNetworkChange")}
-            className="py-2 px-2.5 rounded-lg bg-[#12141A] hover:bg-zinc-900 border border-white/[0.08] hover:border-rose-500/40 text-rose-300 text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+            className="py-2 px-2.5 rounded-lg bg-[#12141A] hover:bg-zinc-900 border border-rose-500/30 hover:border-rose-500/50 text-rose-300 text-[11px] font-sans font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
           >
-            <ShieldX className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">⛔ 3. Блокировать до смены сети</span>
+            <ShieldX className="w-3.5 h-3.5 shrink-0 text-rose-400" strokeWidth={1.75} />
+            <span className="truncate">3. Блокировать до смены сети</span>
           </button>
 
           {/* Action 2: Accept risk and continue */}
@@ -304,9 +320,9 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
             type="button"
             disabled={resolving}
             onClick={() => handleAction("AllowSession")}
-            className="py-2 px-2.5 rounded-lg bg-[#12141A] hover:bg-zinc-900 border border-white/[0.08] hover:border-white/[0.18] text-zinc-300 text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+            className="py-2 px-2.5 rounded-lg bg-[#12141A] hover:bg-zinc-900 border border-white/[0.08] hover:border-white/[0.18] text-zinc-300 text-[11px] font-sans font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
           >
-            <span className="truncate">2. Принять риск (Сессия)</span>
+            <span className="truncate">2. Принять риск и продолжить</span>
           </button>
         </div>
       </div>

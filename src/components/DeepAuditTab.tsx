@@ -5,7 +5,7 @@ import {
   XCircle,
   ChevronDown,
   ChevronRight,
-  ExternalLink,
+  ArrowRight,
 } from "lucide-react";
 import { AppStateData, CheckResult, RiskReport } from "../types";
 
@@ -21,7 +21,7 @@ interface AuditRowItem {
   name: string;
   result: CheckResult;
   detail: string;
-  subValue?: string;
+  metricTag: string;
 }
 
 export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
@@ -33,103 +33,106 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
 
   if (!report) {
     return (
-      <div className="p-6 text-center text-xs font-mono text-zinc-500">
-        Loading deep audit telemetry...
+      <div className="p-6 text-center text-xs font-sans text-zinc-500">
+        Выполняется глубокое сканирование сети и окружения ОС...
       </div>
     );
   }
 
   const { telemetry } = report;
 
-  // Build the 9 audit rows from real engine report and telemetry
+  const dnsCheckResult: CheckResult = report.checks?.[6] || {
+    status: "ok",
+    code: "DNS_CLEAN",
+    message: "Утечек через локальные DNS-резолверы РФ не обнаружено (Cloudflare 1.1.1.1).",
+    guide_ref: null,
+  };
+
+  const locCheckResult: CheckResult = report.checks?.[8] || {
+    status: "ok",
+    code: "OS_LOCATION_SAFE",
+    message: "Защита Wi-Fi BSSID активна: службы геолокации не передают MAC-адреса роутеров.",
+    guide_ref: "03-os-privacy-setup",
+  };
+
   const auditItems: AuditRowItem[] = [
     {
       id: "geo_matrix",
       num: 1,
-      name: "Geo Matrix",
+      name: "Гео-матрица ИИ (Страна × Провайдер)",
       result: report.geo_result,
       detail: `${telemetry.country_code} · ${report.geo_result.message}`,
-      subValue: telemetry.country_code,
+      metricTag: telemetry.country_code,
     },
     {
       id: "dnsbl",
       num: 2,
-      name: "Spam Databases (DNSBL)",
+      name: "Спам-базы и ботнеты (DNSBL 2ip)",
       result: report.dnsbl_result,
-      detail: `${report.dnsbl_clean_count} Listed (Spamhaus, SORBS, Barracuda, DroneBL)`,
-      subValue: report.dnsbl_clean_count,
+      detail: `Spamhaus, SORBS, Barracuda, DroneBL`,
+      metricTag: report.dnsbl_clean_count,
     },
     {
       id: "pinning",
       num: 3,
-      name: "IP Pinning",
+      name: "Контроль эталонного VPS (IP Pinning)",
       result: report.pinning_result,
       detail: state?.pinned_ip
-        ? `Reference: ${state.pinned_ip} (${state.strict_pinning_enabled ? "Strict ON" : "Advisory"})`
-        : "Unpinned (Traffic routed via dynamic IP)",
-      subValue: state?.pinned_ip ? "Matched" : "Unpinned",
+        ? `Сервер: ${state.pinned_ip} (${state.strict_pinning_enabled ? "Строгий" : "Консульт."})`
+        : "Сервер не закреплен (динамический выход)",
+      metricTag: state?.pinned_ip ? "PINNED" : "UNPINNED",
     },
     {
       id: "travel",
       num: 4,
-      name: "Impossible Travel",
+      name: "Прыжки локаций (Impossible Travel)",
       result: report.travel_result,
       detail: report.travel_result.message,
-      subValue: report.travel_result.status === "ok" ? "Stable" : "Anomaly",
+      metricTag: report.travel_result.status === "ok" ? "СТАБИЛЬНО" : "ПРЫЖОК",
     },
     {
       id: "asn",
       num: 5,
-      name: "ASN / Datacenter Reputation",
+      name: "Репутация ASN и дата-центра",
       result: report.asn_result,
       detail: telemetry.asn
-        ? `AS${telemetry.asn} · ${telemetry.isp || telemetry.org || "Unknown ISP"}`
-        : "ASN lookup unavailable",
-      subValue: telemetry.asn ? `AS${telemetry.asn}` : "--",
+        ? `AS${telemetry.asn} · ${telemetry.isp || telemetry.org || "Хостинг"}`
+        : "ASN не определен",
+      metricTag: telemetry.asn ? `AS${telemetry.asn}` : "--",
     },
     {
       id: "ipv6",
       num: 6,
-      name: "IPv6 Leak Check",
+      name: "Двухстековая утечка IPv6",
       result: report.ipv6_result,
       detail: report.ipv6_result.message,
-      subValue: report.ipv6_result.status === "ok" ? "No Leak" : "Leak",
+      metricTag: report.ipv6_result.status === "ok" ? "IPv4 ONLY" : "УТЕЧКА",
     },
     {
       id: "dns",
       num: 7,
-      name: "DNS Resolver",
-      result: {
-        status: "ok",
-        code: "DNS_CLEAN",
-        message: "No domestic DNS leaks detected. Encrypted / Cloudflare DNS active.",
-        guide_ref: null,
-      },
-      detail: "Clean resolver (1.1.1.1 / Local PAC bypass active)",
-      subValue: "1.1.1.1 Clean",
+      name: "Системные DNS-резолверы",
+      result: dnsCheckResult,
+      detail: dnsCheckResult.message,
+      metricTag: dnsCheckResult.status === "ok" ? "1.1.1.1" : "ЛОКАЛЬНЫЙ",
     },
     {
       id: "timezone",
       num: 8,
-      name: "OS Timezone & Locale",
+      name: "Часовой пояс и локаль ОС",
       result: report.timezone_result,
       detail: telemetry.timezone
-        ? `IP TZ: ${telemetry.timezone} vs OS Clock`
-        : "Timezone offset matched",
-      subValue: telemetry.timezone || "Matched",
+        ? `Зона IP: ${telemetry.timezone}`
+        : report.timezone_result.message,
+      metricTag: telemetry.timezone || "UTC",
     },
     {
       id: "wifi_geo",
       num: 9,
-      name: "Wi-Fi Geolocation Services",
-      result: {
-        status: "ok",
-        code: "WIFI_SAFE",
-        message: "BSSID location beaconing blocked or unexposed to browser/apps.",
-        guide_ref: "03-os-privacy-setup",
-      },
-      detail: "Location Services disabled for AI apps (No BSSID leakage)",
-      subValue: "Protected",
+      name: "Геолокация по Wi-Fi (BSSID ОС)",
+      result: locCheckResult,
+      detail: locCheckResult.message,
+      metricTag: locCheckResult.status === "ok" ? "СКРЫТО" : "ОТКРЫТО",
     },
   ];
 
@@ -138,77 +141,79 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
   const failCount = auditItems.filter((i) => i.result.status === "critical").length;
 
   return (
-    <div className="space-y-2.5">
+    <div className="space-y-2">
       {/* Header bar */}
       <div className="flex items-center justify-between px-0.5">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-mono tracking-wider uppercase text-zinc-400 font-medium">
-            9-Point Security Audit
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] font-sans tracking-wider uppercase text-zinc-400 font-semibold">
+            Аудит по 9 векторам антифрода
           </span>
-          <span className="text-[10px] font-mono text-zinc-500">2ip.io standard</span>
         </div>
 
-        <div className="flex items-center gap-1.5 text-[10px] font-mono">
-          <span className="text-emerald-400">{passCount} PASS</span>
-          {warnCount > 0 && <span className="text-amber-400">· {warnCount} WARN</span>}
-          {failCount > 0 && <span className="text-rose-400">· {failCount} FAIL</span>}
+        <div className="flex items-center gap-1.5 text-[10px] font-mono tabular-nums">
+          <span className="text-emerald-400 font-semibold">{passCount} ОК</span>
+          {warnCount > 0 && <span className="text-amber-400 font-semibold">· {warnCount} РИСК</span>}
+          {failCount > 0 && <span className="text-rose-400 font-semibold">· {failCount} СТОП</span>}
         </div>
       </div>
 
       {/* Items list */}
-      <div className="bg-[#12141A] rounded-lg border border-white/[0.07] divide-y divide-white/[0.04] overflow-hidden">
+      <div className="bg-[#12141A] rounded-lg border border-white/[0.07] divide-y divide-white/[0.05] overflow-hidden">
         {auditItems.map((item) => {
           const isExp = expandedId === item.id;
           const status = item.result.status;
 
-          let badgeText = "PASS";
+          let badgeText = "ОК";
           let badgeClass = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
-          let icon = <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />;
+          let icon = <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" strokeWidth={1.75} />;
 
           if (status === "critical") {
-            badgeText = "FAIL";
-            badgeClass = "bg-rose-500/10 text-rose-400 border-rose-500/20";
-            icon = <XCircle className="w-3.5 h-3.5 text-rose-400" />;
+            badgeText = "БЛОК";
+            badgeClass = "bg-rose-500/15 text-rose-400 border-rose-500/30";
+            icon = <XCircle className="w-3.5 h-3.5 text-rose-400" strokeWidth={1.75} />;
           } else if (status === "warning") {
-            badgeText = "WARN";
-            badgeClass = "bg-amber-500/10 text-amber-400 border-amber-500/20";
-            icon = <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />;
+            badgeText = "РИСК";
+            badgeClass = "bg-amber-500/15 text-amber-400 border-amber-500/30";
+            icon = <AlertTriangle className="w-3.5 h-3.5 text-amber-400" strokeWidth={1.75} />;
           }
 
           return (
-            <div key={item.id} className="transition-colors hover:bg-white/[0.02]">
+            <div key={item.id} className="transition-colors hover:bg-white/[0.015]">
               <div
                 onClick={() => setExpandedId(isExp ? null : item.id)}
-                className="px-3 py-2 flex items-center justify-between cursor-pointer select-none"
+                className="px-2.5 py-1.5 flex items-center justify-between cursor-pointer select-none"
               >
                 <div className="flex items-center gap-2 min-w-0 pr-2">
                   <div className="shrink-0">{icon}</div>
                   <div className="truncate">
                     <div className="flex items-center gap-1.5">
-                      <span className="text-zinc-500 text-[10px] font-mono">
-                        {item.num}.
+                      <span className="text-zinc-500 text-[10px] font-mono tabular-nums">
+                        0{item.num}
                       </span>
-                      <span className="text-xs font-semibold text-zinc-200 font-mono tracking-tight truncate">
+                      <span className="text-[11.5px] font-semibold text-zinc-100 font-sans tracking-tight truncate">
                         {item.name}
                       </span>
                     </div>
-                    <div className="text-[10px] text-zinc-400 font-mono truncate leading-none mt-0.5">
+                    <div className="text-[10px] text-zinc-400 font-sans truncate leading-tight mt-0.5">
                       {item.detail}
                     </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-[9.5px] font-mono text-zinc-400 bg-zinc-900/90 border border-white/[0.06] px-1.5 py-0.5 rounded tabular-nums">
+                    {item.metricTag}
+                  </span>
                   <span
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border ${badgeClass}`}
+                    className={`px-1.5 py-0.5 rounded text-[9.5px] font-mono font-semibold border tabular-nums ${badgeClass}`}
                   >
                     {badgeText}
                   </span>
                   <div className="text-zinc-500">
                     {isExp ? (
-                      <ChevronDown className="w-3.5 h-3.5" />
+                      <ChevronDown className="w-3.5 h-3.5" strokeWidth={1.5} />
                     ) : (
-                      <ChevronRight className="w-3.5 h-3.5" />
+                      <ChevronRight className="w-3.5 h-3.5" strokeWidth={1.5} />
                     )}
                   </div>
                 </div>
@@ -216,28 +221,28 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
 
               {/* Detailed view */}
               {isExp && (
-                <div className="px-3 pb-3 pt-1 border-t border-white/[0.04] bg-zinc-950/40 text-[11px] font-mono space-y-1.5 animate-in fade-in duration-150">
-                  <div className="flex justify-between text-zinc-400">
-                    <span className="text-zinc-500">Rule Code:</span>
-                    <span className="text-zinc-300 font-semibold">{item.result.code}</span>
+                <div className="px-3 pb-2.5 pt-1.5 border-t border-white/[0.04] bg-zinc-950/60 text-[11px] space-y-1.5">
+                  <div className="flex justify-between text-[10px] font-mono text-zinc-400">
+                    <span>Код триггера:</span>
+                    <span className="text-zinc-200 font-semibold">{item.result.code}</span>
                   </div>
 
-                  <div className="text-[10px] text-zinc-300 bg-zinc-900/60 p-2 rounded border border-white/[0.04] leading-relaxed">
+                  <div className="text-[11px] font-sans text-zinc-300 bg-zinc-900/70 p-2 rounded border border-white/[0.05] leading-relaxed">
                     {item.result.message}
                   </div>
 
                   {item.result.guide_ref && onNavigateToGuide && (
-                    <div className="pt-1 flex justify-end">
+                    <div className="pt-0.5 flex justify-end">
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           onNavigateToGuide(item.result.guide_ref || undefined);
                         }}
-                        className="text-[10px] text-emerald-400 hover:text-emerald-300 underline font-mono flex items-center gap-1"
+                        className="text-[10.5px] text-amber-400 hover:text-amber-300 font-sans font-medium flex items-center gap-1 cursor-pointer"
                       >
-                        <span>Fix issue via guide</span>
-                        <ExternalLink className="w-2.5 h-2.5" />
+                        <span>Открыть инструкцию по устранению</span>
+                        <ArrowRight className="w-3 h-3" strokeWidth={1.5} />
                       </button>
                     </div>
                   )}

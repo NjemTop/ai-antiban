@@ -152,7 +152,7 @@ impl AppState {
 
     /// Loads state from `state.json` at `storage_path`. If file does not exist, uses default state.
     pub fn load_or_default(storage_path: PathBuf) -> Self {
-        let data = if storage_path.exists() {
+        let mut data = if storage_path.exists() {
             match Self::load_from_file(&storage_path) {
                 Ok(loaded) => loaded,
                 Err(err) => {
@@ -167,6 +167,9 @@ impl AppState {
         } else {
             AppStateData::default()
         };
+
+        // Session allowances are ephemeral per app launch and must not carry over across restarts
+        data.session_allowed_providers.clear();
 
         Self::new(data, Some(storage_path))
     }

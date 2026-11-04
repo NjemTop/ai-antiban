@@ -39,7 +39,6 @@ pub fn disable_all_sysproxy() {
     #[cfg(target_os = "windows")]
     {
         // On Windows remove HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings\AutoConfigURL
-        // using reg command or winreg
         let _ = std::process::Command::new("reg")
             .args([
                 "delete",
@@ -49,6 +48,7 @@ pub fn disable_all_sysproxy() {
                 "/f",
             ])
             .output();
+        notify_windows_inet_refresh();
     }
 
     SYS_PROXY_ACTIVE.store(false, Ordering::SeqCst);
@@ -98,6 +98,7 @@ pub fn enable_sysproxy(pac_url: &str) -> Result<SysproxyStatus, String> {
         if output.is_ok() {
             configured.push("Windows Internet Settings (WinINet)".to_string());
         }
+        notify_windows_inet_refresh();
     }
 
     SYS_PROXY_ACTIVE.store(true, Ordering::SeqCst);
@@ -107,6 +108,35 @@ pub fn enable_sysproxy(pac_url: &str) -> Result<SysproxyStatus, String> {
         pac_url: Some(pac_url.to_string()),
         services_configured: configured,
     })
+}
+
+#[cfg(target_os = "windows")]
+fn notify_windows_inet_refresh() {
+    #[link(name = "wininet")]
+    unsafe extern "system" {
+        fn InternetSetOptionW(
+            hInternet: *mut core::ffi::c_void,
+            dwOption: u32,
+            lpBuffer: *mut core::ffi::c_void,
+            dwBufferLength: u32,
+        ) -> i32;
+    }
+    const INTERNET_OPTION_SETTINGS_CHANGED: u32 = 39;
+    const INTERNET_OPTION_REFRESH: u32 = 37;
+    unsafe {
+        let _ = InternetSetOptionW(
+            core::ptr::null_mut(),
+            INTERNET_OPTION_SETTINGS_CHANGED,
+            core::ptr::null_mut(),
+            0,
+        );
+        let _ = InternetSetOptionW(
+            core::ptr::null_mut(),
+            INTERNET_OPTION_REFRESH,
+            core::ptr::null_mut(),
+            0,
+        );
+    }
 }
 
 /// Returns whether systemic PAC proxy is currently active.

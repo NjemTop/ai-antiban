@@ -46,7 +46,7 @@ function FindProxyForURL(url, host) {{
     for (var i = 0; i < aiDomains.length; i++) {{
         var d = aiDomains[i];
         if (host === d || shExpMatch(host, "*." + d)) {{
-            return "PROXY {proxy_host_port}; DIRECT";
+            return "PROXY {proxy_host_port}";
         }}
     }}
     return "DIRECT";
@@ -72,7 +72,7 @@ mod tests {
         assert!(pac.contains("\"claude.ai\""));
         assert!(pac.contains("\"chatgpt.com\""));
         assert!(pac.contains("\"gemini.google.com\""));
-        assert!(pac.contains("return \"PROXY 127.0.0.1:8899; DIRECT\";"));
+        assert!(pac.contains("return \"PROXY 127.0.0.1:8899\";"));
         assert!(pac.contains("return \"DIRECT\";"));
     }
 }

@@ -61,12 +61,12 @@ impl BinChecker {
         let cleaned: String = raw_input.chars().filter(|c| c.is_ascii_digit()).collect();
 
         if cleaned.len() < 6 {
-            return Err("Please enter at least 6 digits of your card BIN.".to_string());
+            return Err("Введите минимум 6 первых цифр карты (BIN).".to_string());
         }
 
         if cleaned.len() > 8 {
             return Err(
-                "For your privacy and security, do NOT enter full 16-digit card numbers! Enter only the first 6 to 8 digits (Bank Identification Number)."
+                "Для вашей безопасности (For your privacy) НЕ вводите полный 16-значный номер карты! Достаточно первых 6–8 цифр (BIN)."
                     .to_string(),
             );
         }
@@ -87,10 +87,10 @@ impl BinChecker {
                 bin: bin.to_string(),
                 country_code: Some("RU".to_string()),
                 card_type: Some("DEBIT".to_string()),
-                bank_name: Some("National Payment Card System (Mir / RU)".to_string()),
+                bank_name: Some("НСПК «Мир» (Mir / Банк РФ)".to_string()),
                 is_prepaid: false,
                 status: CheckStatus::Critical,
-                advisory: "Domestic Russian Mir card detected. Stripe, OpenAI, and Anthropic automatically reject Russian payment instruments.".to_string(),
+                advisory: "Обнаружена карта «Мир» (Mir) российского банка. Stripe, OpenAI и Anthropic автоматически отклоняют карты РФ.".to_string(),
                 guide_ref: Some(GUIDE_PAYMENT_CARDS.to_string()),
             });
         }
@@ -101,10 +101,10 @@ impl BinChecker {
                 bin: bin.to_string(),
                 country_code: Some("BY".to_string()),
                 card_type: Some("DEBIT".to_string()),
-                bank_name: Some("Belkart (Belarus)".to_string()),
+                bank_name: Some("Белкарт (Беларусь)".to_string()),
                 is_prepaid: false,
                 status: CheckStatus::Critical,
-                advisory: "Domestic Belarusian card detected. Payment gateways of Claude and OpenAI block cards from Belarus.".to_string(),
+                advisory: "Обнаружена карта банка РБ. Платежные шлюзы Claude и OpenAI блокируют карты Беларуси.".to_string(),
                 guide_ref: Some(GUIDE_PAYMENT_CARDS.to_string()),
             });
         }
@@ -150,7 +150,7 @@ impl BinChecker {
                             bank_name,
                             is_prepaid,
                             status: CheckStatus::Ok,
-                            advisory: "Card details retrieved successfully.".to_string(),
+                            advisory: "Карта успешно проверена. Банк-эмитент совместим со Stripe и подходит для оплаты подписки.".to_string(),
                             guide_ref: None,
                         };
 
@@ -172,7 +172,7 @@ impl BinChecker {
             bank_name: None,
             is_prepaid: false,
             status: CheckStatus::Ok,
-            advisory: "Card BIN accepted. Ensure your billing address and VPN exit match the issuing bank country."
+            advisory: "Префикс BIN принят. Убедитесь, что платежный адрес и страна активного VPN совпадают со страной банка карты."
                 .to_string(),
             guide_ref: Some(GUIDE_PAYMENT_CARDS.to_string()),
         };
@@ -188,7 +188,7 @@ impl BinChecker {
             if country == "RU" || country == "BY" {
                 result.status = CheckStatus::Critical;
                 result.advisory = format!(
-                    "Card is issued in {country}. Stripe, OpenAI, and Anthropic reject Russian/Belarusian cards."
+                    "Карта выпущена в юрисдикции {country}. Stripe, OpenAI и Anthropic отклоняют карты РФ и Беларуси."
                 );
                 result.guide_ref = Some(GUIDE_PAYMENT_CARDS.to_string());
                 return;
@@ -197,7 +197,7 @@ impl BinChecker {
 
         if result.is_prepaid {
             result.status = CheckStatus::Warning;
-            result.advisory = "Prepaid / virtual card detected. Stripe and Claude frequently decline reloadable virtual cards. Use a dedicated debit card or subscribe via App Store / Google Play."
+            result.advisory = "Виртуальная / предоплаченная (PREPAID) карта. Антифрод Stripe и Claude часто банит массовые виртуальные BIN. Рекомендуем именную карту или оплату через App Store / Google Play."
                 .to_string();
             result.guide_ref = Some(GUIDE_PAYMENT_CARDS.to_string());
         }
@@ -214,7 +214,7 @@ impl BinChecker {
             if !card_country.eq_ignore_ascii_case(&vpn_upper) && result.status != CheckStatus::Critical {
                 result.status = CheckStatus::Warning;
                 result.advisory = format!(
-                    "Location mismatch: Card is issued in {card_country}, but your active VPN location is {vpn_upper}. When adding a payment card, route via a VPN server in {card_country} or pay via Apple/Google mobile app.",
+                    "Несовпадение регионов: карта выпущена в {card_country}, а ваш текущий VPN — {vpn_upper}. На момент привязки карты включите сервер в {card_country} либо оплачивайте через App Store / Google Play.",
                 );
                 result.guide_ref = Some(GUIDE_PAYMENT_CARDS.to_string());
             }

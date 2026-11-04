@@ -12,7 +12,9 @@ pub use cache_cleaner::clean_ai_app_cache;
 pub use dnsbl::{check_all_dnsbl, evaluate_asn_reputation, evaluate_dnsbl_report};
 pub use geo_matrix::{evaluate_provider_geo, CheckResult, CheckStatus, ProviderId};
 pub use history::{evaluate_impossible_travel, evaluate_ip_pinning};
-pub use leaks::{check_ipv6_leak, evaluate_system_timezone};
+pub use leaks::{
+    check_dns_leak, check_ipv6_leak, check_os_location_services, evaluate_system_timezone,
+};
 pub use network::{NetworkResolver, NetworkTelemetry};
 pub use rules::RuleSet;
 use crate::state::AppState;
@@ -127,8 +129,17 @@ impl Auditor {
         let ipv6_result =
             check_ipv6_leak(&telemetry.country_code, &matrix.global_blocked_countries).await;
 
-        // 7. Timezone Check
+        // 7. DNS Resolver Check
+        let dns_result = check_dns_leak(
+            &telemetry.country_code,
+            &dangerous_asns.russian_isp_keywords,
+        );
+
+        // 8. Timezone Check
         let timezone_result = evaluate_system_timezone(telemetry.timezone.as_deref());
+
+        // 9. OS Location Services Check
+        let location_result = check_os_location_services();
 
         let checks = vec![
             geo_result.clone(),
@@ -137,7 +148,9 @@ impl Auditor {
             dnsbl_result.clone(),
             asn_result.clone(),
             ipv6_result.clone(),
+            dns_result,
             timezone_result.clone(),
+            location_result,
         ];
 
         // Compute Overall Status and Trust Score

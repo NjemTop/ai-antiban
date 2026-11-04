@@ -52,7 +52,7 @@ pub fn clean_ai_app_cache(provider: ProviderId) -> CleanResult {
                 bytes_freed: 0,
                 success: true,
                 message: format!(
-                    "No desktop client directory found for {} on this operating system.",
+                    "Папка настольного клиента {} не найдена на этой ОС.",
                     provider.display_name()
                 ),
             };
@@ -67,7 +67,7 @@ pub fn clean_ai_app_cache(provider: ProviderId) -> CleanResult {
             bytes_freed: 0,
             success: true,
             message: format!(
-                "Desktop cache directory for {} is already clean (directory does not exist).",
+                "Кэш десктопного клиента {} уже чист (директория отсутствует).",
                 provider.display_name()
             ),
         };
@@ -97,11 +97,9 @@ pub fn clean_ai_app_cache(provider: ProviderId) -> CleanResult {
         let path = app_dir.join(target);
         if path.exists() {
             if path.is_dir() {
-                if let Ok(metadata) = std::fs::metadata(&path) {
-                    bytes_freed += metadata.len();
-                }
-                if let Ok(count) = remove_dir_contents(&path) {
+                if let Ok((count, bytes)) = remove_dir_contents(&path) {
                     files_removed += count;
+                    bytes_freed += bytes;
                     let _ = std::fs::remove_dir_all(&path);
                     cleaned_targets.push(target.to_string());
                 }
@@ -124,28 +122,34 @@ pub fn clean_ai_app_cache(provider: ProviderId) -> CleanResult {
         bytes_freed,
         success: true,
         message: format!(
-            "Successfully cleared tracking tokens and cache for {} ({} items removed).",
+            "Следы старой сессии и кэш {} успешно очищены (удалено файлов: {}).",
             provider.display_name(),
             files_removed
         ),
     }
 }
 
-fn remove_dir_contents(path: &std::path::Path) -> std::io::Result<usize> {
+fn remove_dir_contents(path: &std::path::Path) -> std::io::Result<(usize, u64)> {
     let mut count = 0;
+    let mut bytes = 0;
     if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
             let entry_path = entry.path();
             if entry_path.is_dir() {
-                count += remove_dir_contents(&entry_path)?;
+                let (c, b) = remove_dir_contents(&entry_path)?;
+                count += c;
+                bytes += b;
                 let _ = std::fs::remove_dir_all(&entry_path);
             } else {
+                if let Ok(meta) = std::fs::metadata(&entry_path) {
+                    bytes += meta.len();
+                }
                 let _ = std::fs::remove_file(&entry_path);
                 count += 1;
             }
         }
     }
-    Ok(count)
+    Ok((count, bytes))
 }
 
 #[cfg(test)]

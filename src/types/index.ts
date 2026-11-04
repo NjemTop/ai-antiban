@@ -2,7 +2,7 @@ export type ProviderId = "anthropic" | "openai" | "gemini";
 
 export type OverallStatus = "green" | "yellow" | "red";
 
-export type CheckStatus = "ok" | "warning" | "critical";
+export type CheckStatus = "ok" | "warning" | "critical" | "green" | "yellow" | "red";
 
 export interface CheckResult {
   status: CheckStatus;

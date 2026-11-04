@@ -8,7 +8,7 @@ interface TrustRingProps {
 
 export const TrustRing: React.FC<TrustRingProps> = ({
   score,
-  size = 52,
+  size = 48,
   strokeWidth = 3.5,
 }) => {
   const clampedScore = Math.max(0, Math.min(100, Math.round(score)));
@@ -37,7 +37,6 @@ export const TrustRing: React.FC<TrustRingProps> = ({
         height={size}
         viewBox={`0 0 ${size} ${size}`}
       >
-        {/* Track */}
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -46,12 +45,11 @@ export const TrustRing: React.FC<TrustRingProps> = ({
           strokeWidth={strokeWidth}
           fill="transparent"
         />
-        {/* Progress */}
         <circle
           cx={size / 2}
           cy={size / 2}
           r={radius}
-          className={`${colorClass} transition-all duration-700 ease-out`}
+          className={`${colorClass} transition-all duration-500 ease-out`}
           strokeWidth={strokeWidth}
           strokeDasharray={circumference}
           strokeDashoffset={strokeDashoffset}
@@ -59,13 +57,12 @@ export const TrustRing: React.FC<TrustRingProps> = ({
           fill="transparent"
         />
       </svg>
-      {/* Central Score */}
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="font-mono text-[13px] font-bold tracking-tighter text-white tabular-nums">
-          {clampedScore}
+        <span className="font-mono text-[13px] font-bold tracking-tighter text-white tabular-nums leading-none">
+          {clampedScore}%
         </span>
-        <span className="text-[7.5px] uppercase tracking-wider text-zinc-500 font-mono -mt-0.5">
-          Trust
+        <span className="text-[7px] uppercase tracking-wider text-zinc-500 font-sans font-semibold mt-0.5">
+          Траст
         </span>
       </div>
     </div>

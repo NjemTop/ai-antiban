@@ -128,7 +128,7 @@ pub fn evaluate_dnsbl_report(report: &DnsblReport) -> CheckResult {
     if report.hits.is_empty() {
         return CheckResult::ok(
             "DNSBL_CLEAN",
-            format!("DNSBL Spam Check: {} (No blacklist matches).", report.summary_label),
+            format!("Проверка DNSBL: {} — IP чист, совпадений в спам-базах нет.", report.summary_label),
         );
     }
 
@@ -137,7 +137,7 @@ pub fn evaluate_dnsbl_report(report: &DnsblReport) -> CheckResult {
     let joined_names = names.join(", ");
 
     let msg = format!(
-        "IP is listed in spam/botnet databases ({joined_names}). AI antifraud systems flag accounts originating from blacklisted nodes."
+        "Ваш IP найден в спам/ботнет-базах ({joined_names}). Антифрод Cloudflare и Claude блокирует сессии с заспамленных узлов."
     );
 
     if has_critical {
@@ -162,7 +162,7 @@ pub fn evaluate_asn_reputation(
     if let Some(matched_isp) = dangerous_asns.matches_russian_isp(isp_str).or_else(|| dangerous_asns.matches_russian_isp(org_str)) {
         return CheckResult::critical(
             "RUSSIAN_ISP_DETECTED",
-            format!("Connection ISP matches domestic Russian telecom '{matched_isp}'. Outgoing requests to AI services will result in immediate ban."),
+            format!("Обнаружен домашний провайдер РФ ({matched_isp}). Прямой выход без VPN приведет к мгновенному бану аккаунта."),
             Some(GUIDE_PERSONAL_VPN.to_string()),
         );
     }
@@ -171,7 +171,7 @@ pub fn evaluate_asn_reputation(
     if is_pinned {
         return CheckResult::ok(
             "ASN_VERIFIED_PINNED",
-            "IP is verified and pinned as your personal VPS server.",
+            "IP подтвержден и закреплен как ваш личный выделенный VPS.",
         );
     }
 
@@ -181,7 +181,7 @@ pub fn evaluate_asn_reputation(
             return CheckResult::warning(
                 "HIGH_RISK_MASS_VPN_ASN",
                 format!(
-                    "Subnet belongs to mass hosting/VPN '{}' (AS{}). {}. If this is your own dedicated VPS, click 'Pin VPS' to suppress this warning.",
+                    "Подсеть массового хостинга/VPN «{}» (AS{}). {} Если это ваш личный VPS — нажмите «Закрепить IP», чтобы убрать предупреждение.",
                     high_risk.name,
                     high_risk.asn,
                     high_risk.reason
@@ -191,7 +191,7 @@ pub fn evaluate_asn_reputation(
         }
     }
 
-    CheckResult::ok("ASN_CLEAN", "Network ASN and ISP reputation clean.")
+    CheckResult::ok("ASN_CLEAN", "Репутация автономной системы (ASN) и провайдера чистая.")
 }
 
 #[cfg(test)]

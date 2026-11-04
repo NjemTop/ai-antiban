@@ -68,7 +68,7 @@ async fn test_pac_file_generation() {
     assert!(resp_str.contains("\"claude.ai\""));
     assert!(resp_str.contains("\"chatgpt.com\""));
     assert!(resp_str.contains("\"gemini.google.com\""));
-    assert!(resp_str.contains(&format!("PROXY {bound_addr}; DIRECT")));
+    assert!(resp_str.contains(&format!("PROXY {bound_addr}")));
     assert!(resp_str.contains("return \"DIRECT\";"));
 
     srv_handle.abort();

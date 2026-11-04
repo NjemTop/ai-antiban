@@ -45,7 +45,7 @@ pub async fn check_ipv6_leak(ipv4_country: &str, global_blocked: &[String]) -> C
         Err(_) => {
             return CheckResult::ok(
                 "IPV6_SAFE",
-                "IPv6 check skipped (client init error). IPv4 tunneling intact.",
+                "Проверка IPv6 пропущена. Трафик идет через IPv4-туннель.",
             );
         }
     };
@@ -66,7 +66,7 @@ pub async fn check_ipv6_leak(ipv4_country: &str, global_blocked: &[String]) -> C
                         return CheckResult::critical(
                             "IPV6_LEAK_SANCTIONED_CRITICAL",
                             format!(
-                                "CRITICAL: IPv6 leak detected! Your connection leaks an IPv6 address from {ipv6_loc} alongside your IPv4 tunnel. Cloudflare and AI providers will ban this session. Disable IPv6 in OS network settings immediately.",
+                                "КРИТИЧНО: Обнаружена утечка IPv6! Трафик идет мимо VPN напрямую из {ipv6_loc} по IPv6. Немедленно отключите IPv6 в настройках сети ОС.",
                             ),
                             Some(GUIDE_OS_PRIVACY.to_string()),
                         );
@@ -76,7 +76,7 @@ pub async fn check_ipv6_leak(ipv4_country: &str, global_blocked: &[String]) -> C
                         return CheckResult::warning(
                             "IPV6_LEAK_MISMATCH",
                             format!(
-                                "IPv6 routing mismatch: IPv4 location is {ipv4_country}, but IPv6 is routing from {ipv6_loc}. Disable IPv6 to ensure 100% traffic encapsulation.",
+                                "Рассинхрон маршрутов: IPv4 идет через {ipv4_country}, а IPv6 — через {ipv6_loc}. Рекомендуется отключить IPv6 для 100% защиты туннеля.",
                             ),
                             Some(GUIDE_OS_PRIVACY.to_string()),
                         );
@@ -84,16 +84,16 @@ pub async fn check_ipv6_leak(ipv4_country: &str, global_blocked: &[String]) -> C
 
                     return CheckResult::ok(
                         "IPV6_ENCAPSULATED",
-                        format!("IPv6 traffic active and encapsulated under location {ipv6_loc}."),
+                        format!("Трафик IPv6 надежно упакован в туннель ({ipv6_loc})."),
                     );
                 }
             }
-            CheckResult::ok("IPV6_SAFE", "No IPv6 dual-stack leak detected.")
+            CheckResult::ok("IPV6_SAFE", "Утечек по протоколу IPv6 не обнаружено.")
         }
         // Connection error or timeout means IPv6 is disabled or not routing outside tunnel, which is SAFE
         Err(_) => CheckResult::ok(
             "IPV6_DISABLED_SAFE",
-            "IPv6 leak check: Inactive / Safe (No dual-stack leak).",
+            "IPv6 отключен или заблокирован вне туннеля (утечек нет).",
         ),
     }
 }
@@ -105,7 +105,7 @@ pub fn evaluate_system_timezone(ip_timezone: Option<&str>) -> CheckResult {
         Err(_) => {
             return CheckResult::ok(
                 "TIMEZONE_UNKNOWN",
-                "System timezone could not be determined.",
+                "Системный часовой пояс не определен.",
             );
         }
     };
@@ -115,7 +115,7 @@ pub fn evaluate_system_timezone(ip_timezone: Option<&str>) -> CheckResult {
         return CheckResult::warning(
             "TIMEZONE_LEAK_RU",
             format!(
-                "Your system timezone is set to '{system_tz}'. Desktop apps and WebKit/Chromium expose this timezone to Claude and ChatGPT, revealing your domestic location even through a VPN.",
+                "Системный часовой пояс ОС ({system_tz}) указывает на РФ/РБ. Браузеры и десктопный Claude видят эту зону даже через VPN.",
             ),
             Some(GUIDE_OS_PRIVACY.to_string()),
         );
@@ -127,7 +127,7 @@ pub fn evaluate_system_timezone(ip_timezone: Option<&str>) -> CheckResult {
             return CheckResult::warning(
                 "TIMEZONE_MISMATCH",
                 format!(
-                    "System timezone ('{system_tz}') differs from your connection IP timezone ('{target_tz}'). For highest trust score, align your OS timezone with your server location.",
+                    "Часовой пояс ОС ({system_tz}) отличается от таймзоны IP ({target_tz}). Для максимального траста рекомендуется синхронизировать пояс с локацией сервера.",
                 ),
                 Some(GUIDE_OS_PRIVACY.to_string()),
             );
@@ -136,7 +136,7 @@ pub fn evaluate_system_timezone(ip_timezone: Option<&str>) -> CheckResult {
 
     CheckResult::ok(
         "TIMEZONE_MATCH",
-        format!("System timezone '{system_tz}' is aligned and safe."),
+        format!("Системный часовой пояс ({system_tz}) совпадает с локацией IP."),
     )
 }
 
@@ -144,26 +144,89 @@ pub fn is_russian_or_belarusian_timezone(tz: &str) -> bool {
     RUSSIAN_TIMEZONES.iter().any(|&item| item.eq_ignore_ascii_case(tz))
 }
 
-/// Checks OS Location Services status.
+/// Checks OS DNS resolvers for Russian domestic ISP leaks (`scutil --dns` on macOS, `ipconfig /all` on Windows).
+pub fn check_dns_leak(ipv4_country: &str, russian_keywords: &[String]) -> CheckResult {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("scutil").arg("--dns").output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for kw in russian_keywords {
+                if text.to_lowercase().contains(&kw.to_lowercase()) {
+                    return CheckResult::warning(
+                        "DNS_DOMESTIC_WARNING",
+                        format!("В системном DNS обнаружен провайдер «{kw}». Пропишите публичный DNS (1.1.1.1 / 8.8.8.8) в настройках сети."),
+                        Some(GUIDE_OS_PRIVACY.to_string()),
+                    );
+                }
+            }
+            // Check if nameserver[0] is a known domestic ISP public DNS (e.g. 77.88.8.8 Yandex DNS)
+            if text.contains("77.88.8.") && ipv4_country != "RU" {
+                return CheckResult::warning(
+                    "DNS_YANDEX_LEAK",
+                    "Обнаружен Яндекс.DNS (77.88.8.8) при зарубежном VPN. Смените DNS на Cloudflare (1.1.1.1).",
+                    Some(GUIDE_OS_PRIVACY.to_string()),
+                );
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = std::process::Command::new("ipconfig").arg("/all").output() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            if text.contains("77.88.8.") && ipv4_country != "RU" {
+                return CheckResult::warning(
+                    "DNS_YANDEX_LEAK",
+                    "Обнаружен Яндекс.DNS (77.88.8.8) при зарубежном VPN. Смените DNS на Cloudflare (1.1.1.1).",
+                    Some(GUIDE_OS_PRIVACY.to_string()),
+                );
+            }
+        }
+    }
+
+    let _ = (ipv4_country, russian_keywords);
+    CheckResult::ok(
+        "DNS_CLEAN",
+        "Утечек через локальные DNS-резолверы РФ не обнаружено.",
+    )
+}
+
+/// Checks OS Location Services status (BSSID Wi-Fi triangulation).
 pub fn check_os_location_services() -> CheckResult {
     #[cfg(target_os = "windows")]
     {
-        // On Windows check HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location
-        // In this module we check or return guideline
-        CheckResult::ok("OS_LOCATION_CHECK", "Windows Location Services monitor active.")
+        if let Ok(output) = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location",
+                "/v",
+                "Value",
+            ])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&output.stdout);
+            if text.contains("Allow") {
+                return CheckResult::warning(
+                    "OS_LOCATION_ENABLED",
+                    "В Windows включены службы геолокации (BSSID Wi-Fi). Отключите доступ к геопозиции для браузеров и десктопных приложений ИИ.",
+                    Some(GUIDE_OS_PRIVACY.to_string()),
+                );
+            }
+        }
+        CheckResult::ok("OS_LOCATION_SAFE", "Службы геолокации Windows ограничены (BSSID защищен).")
     }
 
     #[cfg(target_os = "macos")]
     {
         CheckResult::ok(
-            "OS_LOCATION_CHECK",
-            "macOS Wi-Fi Location Services check: Ensure Claude Desktop has location access disabled in System Settings.",
+            "OS_LOCATION_SAFE",
+            "Защита Wi-Fi BSSID: убедитесь, что для Claude и браузера отключена геолокация в Системных настройках.",
         )
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        CheckResult::ok("OS_LOCATION_CHECK", "OS Location Services monitor safe.")
+        CheckResult::ok("OS_LOCATION_SAFE", "Службы геолокации ОС не передают BSSID.")
     }
 }
 

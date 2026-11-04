@@ -163,8 +163,12 @@ impl ProxyServer {
         let provider = match provider_opt {
             Some(p) => p,
             None => {
-                // Not an AI domain - transparent pass-through direct tunnel
-                return self.tunnel_to_target(client, &host, port).await;
+                // Reject non-AI domains on local proxy to prevent open-proxy SSRF abuse
+                return send_forbidden(
+                    client,
+                    "AI-AntiBan local gateway only routes authorized AI provider domains.",
+                )
+                .await;
             }
         };
 

@@ -4,15 +4,65 @@ pub mod proxy;
 pub mod state;
 pub mod sysproxy;
 
+use std::time::Duration;
 use tauri::{
-    menu::{Menu, MenuItem},
+    image::Image,
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager,
 };
 
+pub const MAIN_TRAY_ID: &str = "main-tray";
+
+const TRAY_ICON_GREEN: &[u8] = include_bytes!("../icons/tray-green.png");
+const TRAY_ICON_YELLOW: &[u8] = include_bytes!("../icons/tray-yellow.png");
+const TRAY_ICON_RED: &[u8] = include_bytes!("../icons/tray-red.png");
+
+/// Updates the system tray icon, menu bar title (macOS), and tooltip based on current audit report.
+pub fn update_tray_from_report(
+    app: &tauri::AppHandle,
+    report: &auditor::RiskReport,
+    is_pinned: bool,
+    has_blocked: bool,
+) {
+    if let Some(tray) = app.tray_by_id(MAIN_TRAY_ID) {
+        let country = &report.telemetry.country_code;
+        let score = report.trust_score;
+
+        let (icon_bytes, status_label, dot) = if has_blocked {
+            (TRAY_ICON_RED, format!(" {country} · HOLD"), "🔴")
+        } else {
+            match report.overall_status {
+                auditor::OverallStatus::Green => {
+                    let pin_mark = if is_pinned { " 📌" } else { "" };
+                    (TRAY_ICON_GREEN, format!(" {country} · {score}%{pin_mark}"), "🟢")
+                }
+                auditor::OverallStatus::Yellow => {
+                    (TRAY_ICON_YELLOW, format!(" {country} · РИСК"), "🟡")
+                }
+                auditor::OverallStatus::Red => {
+                    (TRAY_ICON_RED, format!(" {country} · БЛОК"), "🔴")
+                }
+            }
+        };
+
+        let _ = tray.set_title(Some(&status_label));
+
+        let tooltip = format!(
+            "AI-AntiBan {dot} IP: {} ({}) · Траст: {}% · DNSBL: {}",
+            report.telemetry.ip, country, score, report.dnsbl_clean_count
+        );
+        let _ = tray.set_tooltip(Some(&tooltip));
+
+        if let Ok(img) = Image::from_bytes(icon_bytes) {
+            let _ = tray.set_icon(Some(img));
+        }
+    }
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+    format!("Привет, {}! AI-AntiBan активен.", name)
 }
 
 #[tauri::command]
@@ -25,13 +75,28 @@ async fn audit_connection(
     provider: String,
     state: tauri::State<'_, state::AppState>,
     auditor: tauri::State<'_, auditor::Auditor>,
+    app: tauri::AppHandle,
     force_refresh: Option<bool>,
 ) -> Result<auditor::RiskReport, String> {
     let provider_id = auditor::ProviderId::from_id(&provider)
-        .ok_or_else(|| format!("Unknown provider: {provider}"))?;
-    auditor
+        .ok_or_else(|| format!("Неизвестный провайдер: {provider}"))?;
+    let report = auditor
         .evaluate_all(provider_id, &state, force_refresh.unwrap_or(false))
-        .await
+        .await?;
+
+    // Sync system tray status whenever Anthropic or primary audit runs
+    if provider_id == auditor::ProviderId::Anthropic || force_refresh.unwrap_or(false) {
+        let st = state.get_data().await;
+        let is_pinned = st
+            .pinned_ip
+            .as_ref()
+            .map(|p| p.trim() == report.telemetry.ip.trim())
+            .unwrap_or(false);
+        let has_blocked = !st.blocked_providers.is_empty();
+        update_tray_from_report(&app, &report, is_pinned, has_blocked);
+    }
+
+    Ok(report)
 }
 
 #[tauri::command]
@@ -39,7 +104,7 @@ async fn clean_app_cache(
     provider: String,
 ) -> Result<auditor::cache_cleaner::CleanResult, String> {
     let provider_id = auditor::ProviderId::from_id(&provider)
-        .ok_or_else(|| format!("Unknown provider: {provider}"))?;
+        .ok_or_else(|| format!("Неизвестный провайдер: {provider}"))?;
     Ok(auditor::clean_ai_app_cache(provider_id))
 }
 
@@ -158,10 +223,10 @@ async fn simulate_interception(
     let geo_result = auditor::evaluate_provider_geo(&matrix, provider_id, &telemetry.country_code);
     let pinning_result = auditor::CheckResult::warning(
         "PINNED_IP_NOT_CONFIGURED",
-        "Strict Pinning is disabled. Traffic routing via unpinned commercial IP.",
+        "Строгая привязка IP отключена. Трафик идет через публичный коммерческий VPN-пул.",
         Some(auditor::geo_matrix::GUIDE_PERSONAL_VPN.to_string()),
     );
-    let travel_result = auditor::CheckResult::ok("TRAVEL_NORMAL", "No previous travel conflict.");
+    let travel_result = auditor::CheckResult::ok("TRAVEL_NORMAL", "Конфликтов перемещения за 12ч нет.");
     let dnsbl_report = auditor::check_all_dnsbl(&telemetry.ip, &dangerous_asns).await;
     let dnsbl_result = auditor::evaluate_dnsbl_report(&dnsbl_report);
     let asn_result = auditor::evaluate_asn_reputation(
@@ -171,7 +236,7 @@ async fn simulate_interception(
         &dangerous_asns,
         false,
     );
-    let ipv6_result = auditor::CheckResult::ok("IPV6_SAFE", "No IPv6 dual-stack leak.");
+    let ipv6_result = auditor::CheckResult::ok("IPV6_SAFE", "Утечек по протоколу IPv6 не обнаружено.");
     let timezone_result = auditor::evaluate_system_timezone(telemetry.timezone.as_deref());
 
     let checks = vec![
@@ -209,7 +274,7 @@ async fn simulate_interception(
     let payload = proxy::RiskInterceptPayload {
         id: hold_id,
         provider: provider_id,
-        host: "claude.ai".to_string(),
+        host: "api.anthropic.com:443".to_string(),
         report,
         ttl_seconds: proxy::hold_queue::DEFAULT_HOLD_TTL_SECS,
     };
@@ -276,37 +341,117 @@ pub fn run() {
 
             // Initialize and start local selective PAC + Hold Proxy
             let handle_clone = app.handle().clone();
+            let auditor_for_proxy = risk_auditor.clone();
+            let state_for_proxy = app_state.clone();
             tauri::async_runtime::block_on(async {
                 let proxy_mgr = proxy::ProxyManager::start(
-                    risk_auditor,
-                    app_state,
+                    auditor_for_proxy,
+                    state_for_proxy,
                     Some(handle_clone),
-                ).await.expect("Failed to start proxy server");
+                )
+                .await
+                .expect("Failed to start proxy server");
                 app.manage(proxy_mgr);
             });
 
-            // Native tray menu
-            let quit_i = MenuItem::with_id(app, "quit", "Quit AI-AntiBan", true, None::<&str>)?;
-            let show_i = MenuItem::with_id(app, "show", "Open Dashboard", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            // Native Russian tray menu with live actions
+            let status_i = MenuItem::with_id(
+                app,
+                "status_header",
+                "🛡️ AI-AntiBan: Защитный шлюз активен",
+                false,
+                None::<&str>,
+            )?;
+            let sep1 = PredefinedMenuItem::separator(app)?;
+            let show_i = MenuItem::with_id(
+                app,
+                "show",
+                "Открыть панель мониторинга (Пульс)",
+                true,
+                None::<&str>,
+            )?;
+            let rescan_i = MenuItem::with_id(
+                app,
+                "rescan",
+                "↻ Перепроверить соединение (2ip / DNSBL)",
+                true,
+                None::<&str>,
+            )?;
+            let pin_i = MenuItem::with_id(
+                app,
+                "pin_ip",
+                "📌 Закрепить текущий IP как личный VPS",
+                true,
+                None::<&str>,
+            )?;
+            let guide_i = MenuItem::with_id(
+                app,
+                "open_guide",
+                "⚡ Гайд: Свой чистый VPN за 15 минут",
+                true,
+                None::<&str>,
+            )?;
+            let sep2 = PredefinedMenuItem::separator(app)?;
+            let quit_i = MenuItem::with_id(
+                app,
+                "quit",
+                "Выйти и отключить PAC-перехват",
+                true,
+                None::<&str>,
+            )?;
 
-            let _tray = TrayIconBuilder::new()
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &status_i,
+                    &sep1,
+                    &show_i,
+                    &rescan_i,
+                    &pin_i,
+                    &guide_i,
+                    &sep2,
+                    &quit_i,
+                ],
+            )?;
+
+            let mut tray_builder = TrayIconBuilder::with_id(MAIN_TRAY_ID)
                 .menu(&menu)
+                .title(" ···")
+                .tooltip("AI-AntiBan — Аудитор рисков для Claude, ChatGPT и Gemini")
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| {
-                    match event.id.as_ref() {
-                        "quit" => {
-                            sysproxy::disable_all_sysproxy();
-                            app.exit(0);
-                        }
-                        "show" => {
-                            if let Some(win) = app.get_webview_window("main") {
-                                let _ = win.show();
-                                let _ = win.set_focus();
-                            }
-                        }
-                        _ => {}
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "quit" => {
+                        sysproxy::disable_all_sysproxy();
+                        app.exit(0);
                     }
+                    "show" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                    "rescan" => {
+                        let _ = app.emit("tray://rescan", ());
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                    "pin_ip" => {
+                        let _ = app.emit("tray://pin-current-ip", ());
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                    "open_guide" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                            let _ = app.emit("interceptor://open-guide", "01-personal-vpn-15min");
+                        }
+                    }
+                    _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
@@ -325,8 +470,50 @@ pub fn run() {
                             }
                         }
                     }
-                })
-                .build(app)?;
+                });
+
+            if let Ok(initial_icon) = Image::from_bytes(TRAY_ICON_GREEN) {
+                tray_builder = tray_builder.icon(initial_icon);
+            }
+
+            let _tray = tray_builder.build(app)?;
+
+            // Background Network Watcher & Tray Status Updater
+            let watcher_handle = app.handle().clone();
+            let watcher_auditor = risk_auditor.clone();
+            let watcher_state = app_state.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut last_ip = String::new();
+                loop {
+                    if let Ok(report) = watcher_auditor
+                        .evaluate_all(auditor::ProviderId::Anthropic, &watcher_state, false)
+                        .await
+                    {
+                        let current_ip = report.telemetry.ip.clone();
+                        let ip_changed = !last_ip.is_empty() && last_ip != current_ip;
+                        last_ip = current_ip.clone();
+
+                        // If network changed to a safe Green IP, automatically lift temporary provider blocks
+                        if ip_changed && report.overall_status == auditor::OverallStatus::Green {
+                            let _ = watcher_state.clear_blocked_providers().await;
+                            let _ = watcher_handle.emit("network://changed", &report);
+                        } else if ip_changed {
+                            let _ = watcher_handle.emit("network://changed", &report);
+                        }
+
+                        let st = watcher_state.get_data().await;
+                        let is_pinned = st
+                            .pinned_ip
+                            .as_ref()
+                            .map(|p| p.trim() == current_ip.trim())
+                            .unwrap_or(false);
+                        let has_blocked = !st.blocked_providers.is_empty();
+
+                        update_tray_from_report(&watcher_handle, &report, is_pinned, has_blocked);
+                    }
+                    tokio::time::sleep(Duration::from_secs(15)).await;
+                }
+            });
 
             Ok(())
         })

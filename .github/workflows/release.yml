@@ -37,6 +37,7 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
+          version: 9
           run_install: false
 
       - name: Get pnpm store directory
@@ -79,9 +80,9 @@ jobs:
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: 'AI-AntiBan ${{ github.ref_name }}'
           releaseBody: |
-            Automated release of AI-AntiBan.
-            - macOS: Universal `.dmg` / `.app` (supports Apple Silicon M-series and Intel)
-            - Windows: `.msi` and `.exe` (NSIS)
+            ## AI-AntiBan ${{ github.ref_name }} — Защита аккаунтов Claude, ChatGPT и Gemini
+            - **macOS (Apple Silicon & Intel)**: скачайте `.dmg`, перетащите в `Applications`, при первом запуске выполните `xattr -cr /Applications/AI-AntiBan.app`
+            - **Windows (10/11 x64)**: скачайте `.exe` (NSIS) или `.msi` установщик
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

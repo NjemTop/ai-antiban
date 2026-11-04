@@ -161,11 +161,11 @@ pub fn evaluate_provider_geo(
     // 1. Check Global Sanctioned List (RU, BY, CN, HK, MO, IR, KP, SY, CU)
     if matrix.global_blocked_countries.contains(&country_code) {
         let msg = if country_code == "HK" {
-            "Hong Kong (HK) is globally restricted by Claude, OpenAI, and Google. Users frequently mistakenly assume HK is supported, triggering immediate account bans. Switch to NL, DE, or US."
+            "Гонконг (HK) глобально заблокирован в Claude, OpenAI и Google Gemini. Многие ставят HK как «быстрый узел», что ведет к мгновенному бану аккаунта. Переключитесь на NL, DE или US."
         } else if country_code == "RU" || country_code == "BY" {
-            "Connection is originating from a sanctioned country (RU/BY). Access is strictly prohibited by AI providers. An unblocked VPN or personal VPS is required."
+            "Подключение идет с подсанкционного IP (РФ / РБ). Доступ к ИИ-сервисам запрещен, отправка пакета приведет к мгновенному флагу и бану аккаунта. Включите VPN или личный VPS."
         } else {
-            "Access from this country is restricted by all major AI providers. Connection blocked to protect account integrity."
+            "Доступ из этой юрисдикции заблокирован всеми основными ИИ-провайдерами. Соединение остановлено для защиты аккаунта."
         };
 
         return CheckResult::critical(
@@ -186,7 +186,7 @@ pub fn evaluate_provider_geo(
                 .cloned()
                 .unwrap_or_else(|| {
                     format!(
-                        "Access to {} is blocked from location {}.",
+                        "Доступ к {} заблокирован для локации {}.",
                         provider.display_name(),
                         country_code
                     )
@@ -218,7 +218,7 @@ pub fn evaluate_provider_geo(
                 return CheckResult::warning(
                     "ANTHROPIC_TRANSIT_HUB_RISK",
                     format!(
-                        "Location {} is a known transit hub. Anthropic antifraud heavily penalizes accounts if billing card or system timezone do not match.",
+                        "Локация {} — транзитный хаб СНГ/Ближнего Востока. Антифрод Claude жестко банит при малейшем несовпадении страны карты или часового пояса.",
                         country_code
                     ),
                     Some(GUIDE_PERSONAL_VPN.to_string()),
@@ -228,7 +228,7 @@ pub fn evaluate_provider_geo(
                 return CheckResult::warning(
                     "GEMINI_TRANSIT_RESTRICTION",
                     format!(
-                        "Location {} may experience Google AI Studio free tier tier quota limits.",
+                        "В локации {} могут действовать лимиты бесплатного тарифа Google AI Studio API.",
                         country_code
                     ),
                     Some(GUIDE_PERSONAL_VPN.to_string()),
@@ -243,7 +243,7 @@ pub fn evaluate_provider_geo(
     CheckResult::ok(
         "GEO_ALLOWED",
         format!(
-            "Location {} is compatible and safe for {}.",
+            "Локация {} полностью совместима и безопасна для {}.",
             country_code,
             provider.display_name()
         ),
@@ -271,7 +271,7 @@ mod tests {
             let res = evaluate_provider_geo(&matrix, provider, "HK");
             assert_eq!(res.status, CheckStatus::Critical);
             assert_eq!(res.code, "GLOBAL_SANCTIONED_COUNTRY");
-            assert!(res.message.contains("Hong Kong"));
+            assert!(res.message.contains("HK") || res.message.contains("Гонконг"));
         }
     }
 
