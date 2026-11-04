@@ -1,0 +1,102 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-11-04",
+  "global_blocked_countries": [
+    "RU",
+    "BY",
+    "CN",
+    "HK",
+    "MO",
+    "IR",
+    "KP",
+    "SY",
+    "CU"
+  ],
+  "recommended_vps_countries": [
+    {
+      "code": "NL",
+      "name_ru": "Нидерланды (Амстердам)",
+      "reason": "Минимальный пинг из РФ, 100% поддержка Claude, ChatGPT и Gemini Web."
+    },
+    {
+      "code": "DE",
+      "name_ru": "Германия (Франкфурт)",
+      "reason": "Отличная связность, полная поддержка Claude, ChatGPT и Gemini."
+    },
+    {
+      "code": "US",
+      "name_ru": "США (Нью-Йорк / Вирджиния)",
+      "reason": "Максимальный доступ ко всем ранним функциям Claude, OpenAI и бесплатному тиру Google AI Studio API."
+    },
+    {
+      "code": "FI",
+      "name_ru": "Финляндия (Хельсинки)",
+      "reason": "Сверхнизкий пинг для СПб и Москвы, зеленая зона для всех провайдеров."
+    }
+  ],
+  "providers": {
+    "anthropic": {
+      "id": "anthropic",
+      "display_name": "Claude (Anthropic)",
+      "domains": [
+        "claude.ai",
+        "anthropic.com",
+        "claudeusercontent.com"
+      ],
+      "blocked_countries": [
+        "RU", "BY", "CN", "HK", "MO", "IR", "KP", "SY", "CU"
+      ],
+      "warning_countries": {
+        "TR": "Локация Турция (TR) находится в зоне повышенного риска у Anthropic из-за массового реселлинга и дешевых прокси. Высокий риск блокировки аккаунта.",
+        "KZ": "Транзитная локация СНГ (Казахстан). Антифрод Claude жестко проверяет совпадение платежной карты и часового пояса.",
+        "AM": "Транзитная локация СНГ (Армения). Повышенное внимание антифрод-системы.",
+        "GE": "Транзитная локация (Грузия). Повышенное внимание антифрод-системы.",
+        "AE": "В ОАЭ часто используются перегруженные публичные VPN-пулы."
+      },
+      "strict_impossible_travel": true,
+      "max_country_switches_per_12h": 1
+    },
+    "openai": {
+      "id": "openai",
+      "display_name": "ChatGPT (OpenAI)",
+      "domains": [
+        "chatgpt.com",
+        "openai.com",
+        "oaistatic.com",
+        "oaiusercontent.com"
+      ],
+      "blocked_countries": [
+        "RU", "BY", "CN", "HK", "MO", "IR", "KP", "SY", "CU"
+      ],
+      "warning_countries": {
+        "IR": "Заблокировано OpenAI",
+        "HK": "Гонконг официально заблокирован OpenAI"
+      },
+      "strict_impossible_travel": false,
+      "max_country_switches_per_12h": 2
+    },
+    "gemini": {
+      "id": "gemini",
+      "display_name": "Google Gemini / AI Studio",
+      "domains": [
+        "gemini.google.com",
+        "aistudio.google.com",
+        "makersuite.google.com",
+        "generativelanguage.googleapis.com",
+        "alkalimakersuite-pa.clients6.google.com"
+      ],
+      "blocked_countries": [
+        "RU", "BY", "CN", "HK", "MO", "IR", "KP", "SY", "CU", "TR"
+      ],
+      "country_block_reasons": {
+        "TR": "Google Gemini и AI Studio не работают или жестко ограничены с турецких IP-адресов (Turkey / TR). Переключитесь на Нидерланды (NL), Германию (DE) или США (US)."
+      },
+      "warning_countries": {
+        "KZ": "Внимание: в ряде регионов СНГ может быть ограничен доступ к Google AI Studio без привязки платежного аккаунта.",
+        "BY": "Полная блокировка сервисов Google AI."
+      },
+      "strict_impossible_travel": false,
+      "max_country_switches_per_12h": 2
+    }
+  }
+}

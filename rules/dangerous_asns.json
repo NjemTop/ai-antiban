@@ -1,0 +1,79 @@
+{
+  "version": "1.1.0",
+  "description": "Известные заспамленные коммерческие VPN-сети, бесплатные прокси-пулы и DNSBL спам-базы (аналог 2ip.io). Если IP принадлежит этим ASN или числится в DNSBL и НЕ закреплен пользователем как личный VPS (Pinned IP), выводится предупреждение.",
+  "dnsbl_zones": [
+    {
+      "zone": "zen.spamhaus.org",
+      "name": "Spamhaus ZEN (SBL / XBL / PBL)",
+      "severity": "critical",
+      "reason": "IP числится в глобальной базе спама и ботнетов Spamhaus. Cloudflare и антифрод Claude блокируют такие подключения."
+    },
+    {
+      "zone": "dnsbl.dronebl.org",
+      "name": "DroneBL (Abused VPN / Proxy / Botnet)",
+      "severity": "warning",
+      "reason": "IP замечен в базе абузных прокси и взломанных узлов DroneBL."
+    },
+    {
+      "zone": "dnsbl.sorbs.net",
+      "name": "SORBS Open Proxy & Spam",
+      "severity": "warning",
+      "reason": "IP находится в черном списке открытых прокси и спам-активности SORBS."
+    },
+    {
+      "zone": "b.barracudacentral.org",
+      "name": "Barracuda Reputation Block List",
+      "severity": "warning",
+      "reason": "Низкая репутация IP по базе Barracuda Central."
+    }
+  ],
+  "high_risk_asns": [
+    {
+      "asn": 9009,
+      "name": "M247 Europe SRL",
+      "reason": "Крупнейший пул массовых коммерческих и бесплатных VPN (ProtonVPN Free, Nord, Surfshark). Сотни пользователей на одном IP — частая причина бана в Claude."
+    },
+    {
+      "asn": 212238,
+      "name": "Datacamp Limited (CDN77)",
+      "reason": "Массовый VPN-хостинг. Если это общий коммерческий VPN, высок риск получить бан из-за соседей по IP."
+    },
+    {
+      "asn": 60068,
+      "name": "Datacamp Limited",
+      "reason": "Используется в массовых коммерческих VPN-сервисах."
+    },
+    {
+      "asn": 20473,
+      "name": "The Constant Company (Vultr / Choopa)",
+      "reason": "Облачный дата-центр. Безопасно, только если это ваш личный выделенный VPS (нажмите «Закрепить IP»)."
+    },
+    {
+      "asn": 24940,
+      "name": "Hetzner Online GmbH",
+      "reason": "Популярный дата-центр. Безопасно, если это ваш личный VPS с индивидуальным IP. Опасно, если это бесплатный публичный прокси."
+    },
+    {
+      "asn": 14061,
+      "name": "DigitalOcean, LLC",
+      "reason": "Подсети DigitalOcean часто блокируются Cloudflare при использовании общих VPN. Если это ваш личный сервер — закрепите IP."
+    }
+  ],
+  "russian_isp_keywords": [
+    "Rostelecom",
+    "MTS",
+    "PJSC MTS",
+    "MegaFon",
+    "VimpelCom",
+    "Beeline",
+    "ER-Telecom",
+    "Dom.ru",
+    "Yandex",
+    "Selectel",
+    "VK",
+    "Mail.ru",
+    "MGTS",
+    "TTK",
+    "Transtelecom"
+  ]
+}
