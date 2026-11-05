@@ -90,7 +90,7 @@ impl BinChecker {
                 bank_name: Some("НСПК «Мир» (Mir / Банк РФ)".to_string()),
                 is_prepaid: false,
                 status: CheckStatus::Critical,
-                advisory: "Обнаружена карта «Мир» (Mir) российского банка. Stripe, OpenAI и Anthropic автоматически отклоняют карты РФ.".to_string(),
+                advisory: "Обнаружена карта «Мир» (Mir). Международные платформы не поддерживают карты этой платежной системы.".to_string(),
                 guide_ref: Some(GUIDE_PAYMENT_CARDS.to_string()),
             });
         }
@@ -104,7 +104,7 @@ impl BinChecker {
                 bank_name: Some("Белкарт (Беларусь)".to_string()),
                 is_prepaid: false,
                 status: CheckStatus::Critical,
-                advisory: "Обнаружена карта банка РБ. Платежные шлюзы Claude и OpenAI блокируют карты Беларуси.".to_string(),
+                advisory: "Обнаружена локальная карта региона. Международные платежные системы не обслуживают карты этой юрисдикции.".to_string(),
                 guide_ref: Some(GUIDE_PAYMENT_CARDS.to_string()),
             });
         }
@@ -188,7 +188,7 @@ impl BinChecker {
             if country == "RU" || country == "BY" {
                 result.status = CheckStatus::Critical;
                 result.advisory = format!(
-                    "Карта выпущена в юрисдикции {country}. Stripe, OpenAI и Anthropic отклоняют карты РФ и Беларуси."
+                    "Карта выпущена в неподдерживаемой юрисдикции ({country}). Международные сервисы не принимают карты этого региона."
                 );
                 result.guide_ref = Some(GUIDE_PAYMENT_CARDS.to_string());
                 return;
@@ -197,7 +197,7 @@ impl BinChecker {
 
         if result.is_prepaid {
             result.status = CheckStatus::Warning;
-            result.advisory = "Виртуальная / предоплаченная (PREPAID) карта. Антифрод Stripe и Claude часто банит массовые виртуальные BIN. Рекомендуем именную карту или оплату через App Store / Google Play."
+            result.advisory = "Виртуальная / предоплаченная (PREPAID) карта. Международные сервисы часто отклоняют предоплаченные BIN без подтверждения адреса (AVS). Рекомендуется именная Debit-карта или оплата через магазины приложений."
                 .to_string();
             result.guide_ref = Some(GUIDE_PAYMENT_CARDS.to_string());
         }
@@ -214,7 +214,7 @@ impl BinChecker {
             if !card_country.eq_ignore_ascii_case(&vpn_upper) && result.status != CheckStatus::Critical {
                 result.status = CheckStatus::Warning;
                 result.advisory = format!(
-                    "Несовпадение регионов: карта выпущена в {card_country}, а ваш текущий VPN — {vpn_upper}. На момент привязки карты включите сервер в {card_country} либо оплачивайте через App Store / Google Play.",
+                    "Несовпадение регионов: карта выпущена в {card_country}, а ваш текущий сетевой шлюз — {vpn_upper}. На момент проведения платежа рекомендуется синхронизировать регион шлюза с регионом карты.",
                 );
                 result.guide_ref = Some(GUIDE_PAYMENT_CARDS.to_string());
             }

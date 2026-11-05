@@ -136,7 +136,7 @@ impl NetworkGuard {
             .timeout(Duration::from_millis(2000))
             // Never reuse keep-alive sockets: they may still point to the previous route.
             .pool_max_idle_per_host(0)
-            .user_agent("AI-AntiBan/1.0")
+            .user_agent("Zastava/1.0")
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {

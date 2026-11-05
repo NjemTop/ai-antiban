@@ -78,10 +78,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: 'AI-AntiBan ${{ github.ref_name }}'
+          releaseName: 'Zastava ${{ github.ref_name }}'
           releaseBody: |
-            ## AI-AntiBan ${{ github.ref_name }} — Защита аккаунтов Claude, ChatGPT и Gemini
-            - **macOS (Apple Silicon & Intel)**: скачайте `.dmg`, перетащите в `Applications`, при первом запуске выполните `xattr -cr /Applications/AI-AntiBan.app`
+            ## Застава ${{ github.ref_name }} — Интеллектуальный сетевой шлюз
+            - **macOS (Apple Silicon & Intel)**: скачайте `.dmg`, перетащите в `Applications`, при первом запуске выполните `xattr -cr /Applications/Zastava.app`
             - **Windows (10/11 x64)**: скачайте `.exe` (NSIS) или `.msi` установщик
           releaseDraft: false
           prerelease: false

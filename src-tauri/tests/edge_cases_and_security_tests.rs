@@ -1,10 +1,10 @@
-use ai_antiban_lib::auditor::dnsbl::{evaluate_asn_reputation, format_dnsbl_query, reverse_ipv4};
-use ai_antiban_lib::auditor::geo_matrix::{evaluate_provider_geo, CheckStatus, ProviderId};
-use ai_antiban_lib::auditor::history::{evaluate_impossible_travel, evaluate_ip_pinning};
-use ai_antiban_lib::auditor::leaks::{is_russian_or_belarusian_timezone, RUSSIAN_TIMEZONES};
-use ai_antiban_lib::auditor::rules::{DangerousAsns, ProviderMatrix};
-use ai_antiban_lib::bin_checker::BinChecker;
-use ai_antiban_lib::state::IpHistoryEntry;
+use zastava_lib::auditor::dnsbl::{evaluate_asn_reputation, format_dnsbl_query, reverse_ipv4};
+use zastava_lib::auditor::geo_matrix::{evaluate_provider_geo, CheckStatus, ProviderId};
+use zastava_lib::auditor::history::{evaluate_impossible_travel, evaluate_ip_pinning};
+use zastava_lib::auditor::leaks::{is_russian_or_belarusian_timezone, RUSSIAN_TIMEZONES};
+use zastava_lib::auditor::rules::{DangerousAsns, ProviderMatrix};
+use zastava_lib::bin_checker::BinChecker;
+use zastava_lib::state::IpHistoryEntry;
 
 #[test]
 fn test_edge_case_turkey_gemini_special_rules() {

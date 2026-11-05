@@ -8,7 +8,7 @@
   * *Почему Rust:* Нативная производительность, отсутствие сборщика мусора, минимальное потребление ОЗУ в фоне (~15–25 МБ), идеальная поддержка асинхронного TCP-проксирования (`tokio::net::TcpListener`), прямой доступ к системным вызовам macOS (`networksetup`, `scutil`) и Windows (`winreg`, `WinInet` API).
 * **Пользовательский интерфейс (Frontend):** **React 18 + TypeScript + TailwindCSS (Vite)** внутри нативного WebView (WebKit на macOS, WebView2 на Windows).
 * **Размер дистрибутива:** ~4–7 МБ (`.dmg` для macOS Universal, `.msi` / `.exe` для Windows x64/ARM64).
-* **Локальное хранилище состояния:** Локальный JSON-конфиг в пользовательской директории (`~/Library/Application Support/com.ai-antiban.app/state.json` на macOS, `%APPDATA%\com.ai-antiban.app\state.json` на Windows).
+* **Локальное хранилище состояния:** Локальный JSON-конфиг в пользовательской директории (`~/Library/Application Support/com.zastava.app/state.json` на macOS, `%APPDATA%\com.zastava.app\state.json` на Windows).
 
 ---
 
@@ -18,7 +18,7 @@
 Если завернуть весь трафик ОС в локальный прокси, мы можем конфликтовать с системными VPN-клиентами (Amnezia, Streisand, V2Ray, Tun2Socks, Outline) и замедлять торренты/игры.
 Поэтому используется **Selective Proxy Auto-Configuration (`proxy.pac`)**:
 
-1. Локальный сервер AI-AntiBan поднимается на `127.0.0.1:8899` (с фолбэком на свободный порт).
+1. Локальный сервер Застава поднимается на `127.0.0.1:8899` (с фолбэком на свободный порт).
 2. На `GET http://127.0.0.1:8899/proxy.pac` он отдает динамический PAC-скрипт:
 
 ```javascript
@@ -50,7 +50,7 @@ function FindProxyForURL(url, host) {
 ```mermaid
 sequenceDiagram
     participant App as Claude / ChatGPT / Gemini
-    participant Proxy as AI-AntiBan Proxy (127.0.0.1:8899)
+    participant Proxy as Застава Proxy (127.0.0.1:8899)
     participant Auditor as Risk Auditor Engine
     participant UI as Native Alert Popup
     participant Target as AI Provider Server (443)
@@ -98,7 +98,7 @@ sequenceDiagram
 | **Детектор смены сети (Network Change Watcher)** | Мониторинг смены локального IP / интерфейса каждые 3 сек + сброс кэша аудитора при любом изменении маршрута по умолчанию (`route -n get default`). | Мониторинг смены сетевого интерфейса (`NotifyAddrChange` / опрос активного интерфейса) + сброс кэша аудитора. |
 
 ### 3.2. Защита от обхода системного прокси (Fallback-монитор)
-Некоторые CLI-утилиты или кастомные сборки могут игнорировать системный `PAC`-файл. Для них в AI-AntiBan предусмотрен:
+Некоторые CLI-утилиты или кастомные сборки могут игнорировать системный `PAC`-файл. Для них в Застава предусмотрен:
 1. **Индикатор и автоэкспорт переменных окружения** (`HTTPS_PROXY=http://127.0.0.1:8899` для терминала / Claude Code CLI).
 2. **Активный фоновый монитор сети:** даже если приложение не делает запрос в данный момент, фоновый воркер при отвале VPN мгновенно меняет иконку в трее на 🔴 и может выбросить превентивное уведомление: *«Внимание! VPN отключился, ваш IP сейчас из РФ. Не открывайте Claude!»*.
 
@@ -107,7 +107,7 @@ sequenceDiagram
 ## 4. Структура модулей проекта
 
 ```text
-ai-antiban/
+zastava/
 ├── LICENSE                         # MIT License
 ├── PRIVACY.md                      # Zero-Telemetry Манифест
 ├── README.md                       # Описание для GitHub и пользователей из Threads

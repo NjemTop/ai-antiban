@@ -1,12 +1,12 @@
 [package]
-name = "ai-antiban"
+name = "zastava"
 version = "1.0.2"
-description = "AI-AntiBan - Anti-Chain-Ban Risk Auditor"
-authors = ["AI-AntiBan Team"]
+description = "Zastava - AI Network Gateway & Privacy Guardian"
+authors = ["Zastava Team"]
 edition = "2024"
 
 [lib]
-name = "ai_antiban_lib"
+name = "zastava_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

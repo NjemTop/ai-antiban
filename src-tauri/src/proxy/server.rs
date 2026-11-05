@@ -144,7 +144,7 @@ impl ProxyServer {
         }
 
         // Generic HTTP health / info response
-        let resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 30\r\nConnection: close\r\n\r\nAI-AntiBan Interceptor Active\n";
+        let resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nConnection: close\r\n\r\nZastava Gateway Active\n";
         client.write_all(resp.as_bytes()).await?;
         client.flush().await?;
         Ok(())
@@ -180,7 +180,7 @@ impl ProxyServer {
                 // Reject non-AI domains on local proxy to prevent open-proxy SSRF abuse
                 return send_forbidden(
                     client,
-                    "AI-AntiBan local gateway only routes authorized AI provider domains.",
+                    "Zastava local gateway only routes authorized AI provider domains.",
                 )
                 .await;
             }
@@ -195,7 +195,7 @@ impl ProxyServer {
                 if self.guard.await_decision().await != Gate::Open {
                     return send_forbidden(
                         client,
-                        "Network change blocked by AI-AntiBan Risk Auditor: connection was not confirmed.",
+                        "Network change blocked by Zastava Risk Auditor: connection was not confirmed.",
                     )
                     .await;
                 }
@@ -203,7 +203,7 @@ impl ProxyServer {
             Gate::Blocked => {
                 return send_forbidden(
                     client,
-                    "Network change blocked by AI-AntiBan Risk Auditor: switch back to the trusted IP or confirm the new network.",
+                    "Network change blocked by Zastava Risk Auditor: switch back to the trusted IP or confirm the new network.",
                 )
                 .await;
             }
@@ -291,7 +291,7 @@ impl ProxyServer {
                 self.hold_queue.remove(&hold_id).await;
                 send_forbidden(
                     client,
-                    "Connection held and blocked by AI-AntiBan Risk Auditor.",
+                    "Connection held and blocked by Zastava Risk Auditor.",
                 ).await
             }
         }

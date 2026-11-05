@@ -38,7 +38,7 @@ pub fn generate_pac_script(domains: &[String], proxy_host_port: &str) -> String 
     let domains_json = serde_json::to_string_pretty(domains).unwrap_or_else(|_| "[]".to_string());
 
     format!(
-        r#"// AI-AntiBan Selective PAC Script
+        r#"// Zastava Selective PAC Script
 // Automatically routes known AI domains through local hold proxy, keeping everything else DIRECT.
 function FindProxyForURL(url, host) {{
     var aiDomains = {domains_json};

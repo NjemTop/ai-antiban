@@ -390,14 +390,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
             <div>
               <div className="flex items-center gap-1.5">
                 <h1 className="text-xs font-bold tracking-tight text-white">
-                  AI-AntiBan
+                  Застава
                 </h1>
                 <span className="text-[9px] px-1 py-0.2 rounded bg-zinc-900 border border-white/[0.07] text-zinc-400 font-mono tabular-nums">
                   v1.0.2
                 </span>
               </div>
               <p className="text-[9.5px] text-zinc-500 leading-none mt-0.5">
-                Защита ИИ-аккаунтов · Zero-MITM
+                Сетевой шлюз · Zero-MITM
               </p>
             </div>
           </div>
@@ -484,7 +484,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                 : "text-zinc-400 hover:text-zinc-200"
             }`}
           >
-            Карты (BIN)
+            Биллинг
           </button>
         </nav>
 

@@ -49,7 +49,7 @@ pub fn update_tray_from_report(
         let _ = tray.set_title(Some(&status_label));
 
         let tooltip = format!(
-            "AI-AntiBan {dot} IP: {} ({}) · Траст: {}% · DNSBL: {}",
+            "Zastava {dot} IP: {} ({}) · Траст: {}% · DNSBL: {}",
             report.telemetry.ip, country, score, report.dnsbl_clean_count
         );
         let _ = tray.set_tooltip(Some(&tooltip));
@@ -62,7 +62,7 @@ pub fn update_tray_from_report(
 
 #[tauri::command]
 fn greet(name: &str) -> String {
-    format!("Привет, {}! AI-AntiBan активен.", name)
+    format!("Привет, {}! Застава активна.", name)
 }
 
 #[tauri::command]
@@ -425,7 +425,7 @@ pub fn run() {
                 .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>)?;
             app.manage(risk_auditor.clone());
 
-            // Initialize BIN Checker
+            // Initialize Payment Geo Checker
             let bin_checker = bin_checker::BinChecker::new();
             app.manage(bin_checker);
 
@@ -451,10 +451,10 @@ pub fn run() {
             // Protection is ON by default: route AI domains through the local interceptor
             match sysproxy::enable_sysproxy(&pac_url) {
                 Ok(status) => println!(
-                    "AI-AntiBan: защита включена ({} сетевых служб)",
+                    "Застава: сетевой контроль включен ({} сетевых служб)",
                     status.services_configured.len()
                 ),
-                Err(e) => eprintln!("AI-AntiBan: не удалось включить защиту при старте: {e}"),
+                Err(e) => eprintln!("Застава: не удалось включить защиту при старте: {e}"),
             }
 
             // Network guard: detects sudden IP changes and freezes AI traffic until confirmed
@@ -469,7 +469,7 @@ pub fn run() {
             let status_i = MenuItem::with_id(
                 app,
                 "status_header",
-                "🛡️ AI-AntiBan: Защитный шлюз активен",
+                "🛡️ Застава: Сетевой шлюз активен",
                 false,
                 None::<&str>,
             )?;
@@ -528,7 +528,7 @@ pub fn run() {
             let mut tray_builder = TrayIconBuilder::with_id(MAIN_TRAY_ID)
                 .menu(&menu)
                 .title(" ···")
-                .tooltip("AI-AntiBan — Аудитор рисков для Claude, ChatGPT и Gemini")
+                .tooltip("Застава — Сетевой шлюз для работы с ИИ")
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {

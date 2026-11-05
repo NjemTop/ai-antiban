@@ -80,7 +80,7 @@ impl NetworkResolver {
             // Fresh socket per lookup: a pooled keep-alive connection could still use the old route
             // after a VPN switch and report the previous IP / ASN.
             .pool_max_idle_per_host(0)
-            .user_agent("AI-AntiBan/1.0")
+            .user_agent("Zastava/1.0")
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 

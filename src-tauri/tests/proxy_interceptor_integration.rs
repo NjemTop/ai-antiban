@@ -3,12 +3,12 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use ai_antiban_lib::auditor::network::{current_timestamp, NetworkTelemetry};
-use ai_antiban_lib::auditor::Auditor;
-use ai_antiban_lib::proxy::hold_queue::{HoldQueue, HoldResolution};
-use ai_antiban_lib::proxy::ProxyServer;
-use ai_antiban_lib::state::AppState;
-use ai_antiban_lib::sysproxy::SysProxy;
+use zastava_lib::auditor::network::{current_timestamp, NetworkTelemetry};
+use zastava_lib::auditor::Auditor;
+use zastava_lib::proxy::hold_queue::{HoldQueue, HoldResolution};
+use zastava_lib::proxy::ProxyServer;
+use zastava_lib::state::AppState;
+use zastava_lib::sysproxy::SysProxy;
 
 /// Integration Test 1: PAC File Generation & Routing Validation
 /// Spec: GET http://127.0.0.1:8899/proxy.pac returns 200 OK and valid JS code
@@ -152,7 +152,7 @@ async fn test_connect_hold_and_block() {
         "Expected 403 Forbidden, got: {resp_str}"
     );
     assert!(
-        resp_str.contains("AI-AntiBan Risk Auditor"),
+        resp_str.contains("Zastava Risk Auditor"),
         "Expected risk auditor reason in body: {resp_str}"
     );
 
@@ -248,7 +248,7 @@ async fn test_connect_hold_and_allow_session() {
     );
 
     // Verify bidirectional tunnel works through the proxy to mock server
-    let ping_msg = b"HELLO_ANTIBAN_TUNNEL\n";
+    let ping_msg = b"HELLO_ZASTAVA_TUNNEL\n";
     client
         .write_all(ping_msg)
         .await

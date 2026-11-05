@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for AI-AntiBan windows",
+  "description": "Default capability for Zastava windows",
   "windows": ["main", "alert-popup"],
   "permissions": [
     "core:default",

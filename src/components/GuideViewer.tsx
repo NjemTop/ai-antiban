@@ -48,8 +48,8 @@ const VPS_PROVIDERS: VpsProvider[] = [
     locations: ["NL", "DE", "FI", "PL"],
     payments: ["Карты РФ", "СБП", "T-Pay"],
     specs: "1 vCPU · 1 ГБ RAM · 100 Мбит/с",
-    promoCode: "AIANTIBAN",
-    url: "https://timeweb.cloud/?utm_source=ai_antiban",
+    promoCode: "ZASTAVA",
+    url: "https://timeweb.cloud/?utm_source=zastava",
     description:
       "Мгновенный запуск Ubuntu 22.04 в Амстердаме или Франкфурте. Идеально для AmneziaWG и XRay Reality.",
   },
@@ -62,10 +62,10 @@ const VPS_PROVIDERS: VpsProvider[] = [
     locations: ["NL", "US", "FI", "FR"],
     payments: ["Карты РФ", "СБП", "Crypto"],
     specs: "1 vCPU · 1 ГБ RAM · NVMe",
-    promoCode: "AIANTIBAN",
-    url: "https://hostvds.com/?utm_source=ai_antiban",
+    promoCode: "ZASTAVA",
+    url: "https://hostvds.com/?utm_source=zastava",
     description:
-      "Самый доступный выделенный статический IPv4 в Европе и США. Чистые подсети без флагов в Claude.",
+      "Самый доступный выделенный статический IPv4 в Европе и США. Чистые подсети без ограничений.",
   },
   {
     id: "aeza",
@@ -76,10 +76,10 @@ const VPS_PROVIDERS: VpsProvider[] = [
     locations: ["NL", "DE", "FI", "AT", "SE"],
     payments: ["Карты РФ", "СБП", "Crypto"],
     specs: "Ryzen 9 · NVMe · 1 Гбит/с",
-    promoCode: "AIANTIBAN",
-    url: "https://aeza.net/?utm_source=ai_antiban",
+    promoCode: "ZASTAVA",
+    url: "https://aeza.net/?utm_source=zastava",
     description:
-      "Сверхбыстрый канал без лимитов трафика. Отличный пинг из Москвы и СПб для работы в Cursor и Claude.",
+      "Сверхбыстрый канал без лимитов трафика. Отличный пинг для комфортной работы в Cursor и Claude.",
   },
   {
     id: "serveroid",
@@ -90,10 +90,10 @@ const VPS_PROVIDERS: VpsProvider[] = [
     locations: ["NL", "US", "DE"],
     payments: ["Карты РФ", "СБП"],
     specs: "KVM · 1 IPv4 · Безлимит",
-    promoCode: "AIANTIBAN",
-    url: "https://serveroid.com/?utm_source=ai_antiban",
+    promoCode: "ZASTAVA",
+    url: "https://serveroid.com/?utm_source=zastava",
     description:
-      "Европейские дата-центры без соседей по IP и с нулевым риском в базах Spamhaus / Stripe Radar.",
+      "Европейские дата-центры без соседей по IP и с надежной репутацией в базах Spamhaus / DNSBL.",
   },
 ];
 
@@ -338,10 +338,10 @@ export const GuideViewer: React.FC<GuideViewerProps> = ({
                 <span className="w-4 h-4 rounded bg-rose-500/15 border border-rose-500/25 text-rose-400 flex items-center justify-center text-[10px] font-mono">
                   1
                 </span>
-                <span>Откажитесь от одноразовых Prepaid-карт</span>
+                <span>Используйте надежные карты с поддержкой 3D Secure</span>
               </div>
               <p className="text-[11px] text-zinc-400 font-sans leading-relaxed pl-6">
-                Карты из массовых ботов имеют тип <code className="text-zinc-200 font-mono">PREPAID</code>. Когда тысячи людей оплачивают подписку одним и тем же BIN эмитента, Stripe банит всю серию карт вместе с аккаунтами.
+                Виртуальные карты типа <code className="text-zinc-200 font-mono">PREPAID</code> из массовых ботов часто отклоняются международными платежными системами из-за отсутствия проверки адреса (AVS) и 3D Secure. Рекомендуется использовать именные дебетовые карты зарубежных банков или оплату через мобильные маркетплейсы.
               </p>
             </div>
 

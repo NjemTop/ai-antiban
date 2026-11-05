@@ -118,14 +118,14 @@ export const BinCheckerTab: React.FC<BinCheckerTabProps> = ({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-100 font-sans">
             <CreditCard className="w-3.5 h-3.5 text-amber-400" strokeWidth={1.75} />
-            <span>Антифрод-аудит карты перед оплатой (BIN)</span>
+            <span>Проверка совместимости региона биллинга (Geo-Billing)</span>
           </div>
           <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-white/[0.06] text-[10px] font-mono text-zinc-400">
-            Ваш VPN: <strong className="text-emerald-400">{vpnCountry}</strong>
+            Ваш шлюз: <strong className="text-emerald-400">{vpnCountry}</strong>
           </span>
         </div>
         <p className="text-[11px] text-zinc-400 font-sans leading-relaxed">
-          Введите первые 6 цифр зарубежной или виртуальной карты перед привязкой в Stripe / Claude Pro, чтобы проверить тип эмитента (<code className="font-mono text-zinc-300">DEBIT</code> vs <code className="font-mono text-zinc-300">PREPAID</code>) и совпадение регионов.
+          Проверка соответствия страны банка-эмитента и локации сетевого подключения. Помогает избежать отклонения платежей из-за географических несовпадений биллинга.
         </p>
       </div>
 
@@ -188,7 +188,7 @@ export const BinCheckerTab: React.FC<BinCheckerTabProps> = ({
           }}
           className="px-1.5 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.06] text-zinc-300 hover:text-white cursor-pointer"
         >
-          483312 (Prepaid US)
+          483312 (Virtual US)
         </button>
         <button
           type="button"
@@ -243,10 +243,10 @@ export const BinCheckerTab: React.FC<BinCheckerTabProps> = ({
               )}
               <span>
                 {result.status === "ok"
-                  ? "БЕЗОПАСНО"
+                  ? "СОВМЕСТИМО"
                   : result.status === "warning"
-                  ? "РИСК ФРОДА"
-                  : "ОТКАЗ / БАН"}
+                  ? "ВНИМАНИЕ"
+                  : "ОТКЛОНЕНО"}
               </span>
             </div>
           </div>
@@ -264,7 +264,7 @@ export const BinCheckerTab: React.FC<BinCheckerTabProps> = ({
 
             <div className="bg-zinc-950/50 p-2 rounded border border-white/[0.04]">
               <span className="text-[9.5px] font-sans text-zinc-500 block">
-                Категория
+                Тип карты
               </span>
               <span
                 className={`font-mono font-semibold text-xs ${
@@ -277,14 +277,14 @@ export const BinCheckerTab: React.FC<BinCheckerTabProps> = ({
 
             <div className="bg-zinc-950/50 p-2 rounded border border-white/[0.04]">
               <span className="text-[9.5px] font-sans text-zinc-500 block">
-                Prepaid-пул
+                Виртуальная карта
               </span>
               <span
                 className={`font-mono font-semibold text-xs ${
                   result.is_prepaid ? "text-rose-400" : "text-emerald-400"
                 }`}
               >
-                {result.is_prepaid ? "ДА (Риск)" : "НЕТ (Чистая)"}
+                {result.is_prepaid ? "ДА (Ограничения)" : "НЕТ (Стандартная)"}
               </span>
             </div>
           </div>
@@ -300,7 +300,7 @@ export const BinCheckerTab: React.FC<BinCheckerTabProps> = ({
             }`}
           >
             <div className="font-semibold text-[9.5px] font-mono uppercase tracking-wider mb-0.5 opacity-80">
-              Вердикт Stripe Radar / Antifraud:
+              Анализ совместимости биллинга:
             </div>
             {result.advisory}
           </div>
@@ -311,7 +311,7 @@ export const BinCheckerTab: React.FC<BinCheckerTabProps> = ({
               onClick={onNavigateToPaymentGuide}
               className="w-full py-1.5 px-3 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-[11px] font-sans font-medium text-zinc-200 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
             >
-              <span>Инструкция: как оплатить подписку без бана карты</span>
+              <span>Инструкция: безопасная оплата подписок и биллинг</span>
               <ArrowRight className="w-3.5 h-3.5 text-amber-400" strokeWidth={1.75} />
             </button>
           )}
