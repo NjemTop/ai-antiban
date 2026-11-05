@@ -32,9 +32,9 @@ fn test_edge_case_turkey_gemini_special_rules() {
 #[test]
 fn test_edge_case_impossible_travel_exact_window() {
     let now = 1_000_000;
-    // Window is 12 hours = 43200 seconds
-    let inside_window = now - (11 * 3600 + 59 * 60); // 11h 59m ago
-    let outside_window = now - (12 * 3600 + 60); // 12h 1m ago
+    // Window is 4 hours = 14400 seconds
+    let inside_window = now - (3 * 3600 + 59 * 60); // 3h 59m ago
+    let outside_window = now - (4 * 3600 + 60); // 4h 1m ago
 
     let history_inside = vec![IpHistoryEntry::new("1.1.1.1", "DE", Some(1234), inside_window)];
     let res_inside = evaluate_impossible_travel(&history_inside, "US", now, ProviderId::Anthropic);

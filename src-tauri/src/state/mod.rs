@@ -359,6 +359,16 @@ impl AppState {
         }
         self.save_async().await
     }
+
+    pub async fn clear_ip_history_for_provider(&self, provider: &str) -> Result<(), StateError> {
+        {
+            let mut w = self.inner.write().await;
+            if let Some(h) = w.ip_history.get_mut(provider) {
+                h.clear();
+            }
+        }
+        self.save_async().await
+    }
 }
 
 /// Initializes `AppState` from the standard Tauri app data directory.

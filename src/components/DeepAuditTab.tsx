@@ -59,7 +59,7 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
     {
       id: "geo_matrix",
       num: 1,
-      name: "Гео-матрица ИИ (Страна × Провайдер)",
+      name: "Страна подключения (Гео)",
       result: report.geo_result,
       detail: `${telemetry.country_code} · ${report.geo_result.message}`,
       metricTag: telemetry.country_code,
@@ -67,7 +67,7 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
     {
       id: "dnsbl",
       num: 2,
-      name: "Спам-базы и ботнеты (DNSBL 2ip)",
+      name: "Спам-базы (Проверка IP)",
       result: report.dnsbl_result,
       detail: `Spamhaus, SORBS, Barracuda, DroneBL`,
       metricTag: report.dnsbl_clean_count,
@@ -75,43 +75,43 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
     {
       id: "pinning",
       num: 3,
-      name: "Контроль эталонного VPS (IP Pinning)",
+      name: "Привязка к личному IP",
       result: report.pinning_result,
       detail: state?.pinned_ip
-        ? `Сервер: ${state.pinned_ip} (${state.strict_pinning_enabled ? "Строгий" : "Консульт."})`
-        : "Сервер не закреплен (динамический выход)",
+        ? `Сервер: ${state.pinned_ip} (${state.strict_pinning_enabled ? "Строгий" : "Уведомл."})`
+        : "IP не закреплен",
       metricTag: state?.pinned_ip ? "PINNED" : "UNPINNED",
     },
     {
       id: "travel",
       num: 4,
-      name: "Прыжки локаций (Impossible Travel)",
+      name: "Резкая смена страны (за 4ч)",
       result: report.travel_result,
       detail: report.travel_result.message,
-      metricTag: report.travel_result.status === "ok" ? "СТАБИЛЬНО" : "ПРЫЖОК",
+      metricTag: report.travel_result.status === "ok" ? "СТАБИЛЬНО" : "СКАЧОК",
     },
     {
       id: "asn",
       num: 5,
-      name: "Репутация ASN и дата-центра",
+      name: "Провайдер и дата-центр (ASN)",
       result: report.asn_result,
       detail: telemetry.asn
         ? `AS${telemetry.asn} · ${telemetry.isp || telemetry.org || "Хостинг"}`
-        : "ASN не определен",
+        : "Провайдер не определен",
       metricTag: telemetry.asn ? `AS${telemetry.asn}` : "--",
     },
     {
       id: "ipv6",
       num: 6,
-      name: "Двухстековая утечка IPv6",
+      name: "Утечка реального IP по IPv6",
       result: report.ipv6_result,
       detail: report.ipv6_result.message,
-      metricTag: report.ipv6_result.status === "ok" ? "IPv4 ONLY" : "УТЕЧКА",
+      metricTag: report.ipv6_result.status === "ok" ? "ВЫКЛ" : "УТЕЧКА",
     },
     {
       id: "dns",
       num: 7,
-      name: "Системные DNS-резолверы",
+      name: "Проверка DNS-серверов",
       result: dnsCheckResult,
       detail: dnsCheckResult.message,
       metricTag: dnsCheckResult.status === "ok" ? "1.1.1.1" : "ЛОКАЛЬНЫЙ",
@@ -119,7 +119,7 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
     {
       id: "timezone",
       num: 8,
-      name: "Часовой пояс и локаль ОС",
+      name: "Часовой пояс системы",
       result: report.timezone_result,
       detail: telemetry.timezone
         ? `Зона IP: ${telemetry.timezone}`
@@ -129,7 +129,7 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
     {
       id: "wifi_geo",
       num: 9,
-      name: "Геолокация по Wi-Fi (BSSID ОС)",
+      name: "Геолокация по Wi-Fi в ОС",
       result: locCheckResult,
       detail: locCheckResult.message,
       metricTag: locCheckResult.status === "ok" ? "СКРЫТО" : "ОТКРЫТО",
@@ -146,7 +146,7 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
       <div className="flex items-center justify-between px-0.5">
         <div className="flex items-center gap-1.5">
           <span className="text-[10px] font-sans tracking-wider uppercase text-zinc-400 font-semibold">
-            Аудит по 9 векторам антифрода
+            Детальная проверка по 9 пунктам
           </span>
         </div>
 

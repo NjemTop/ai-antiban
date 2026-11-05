@@ -136,6 +136,66 @@ async fn toggle_strict_pinning(
 }
 
 #[tauri::command]
+async fn allow_provider_session(
+    provider: String,
+    state: tauri::State<'_, state::AppState>,
+    auditor: tauri::State<'_, auditor::Auditor>,
+    proxy_manager: tauri::State<'_, proxy::ProxyManager>,
+) -> Result<(), String> {
+    state
+        .allow_provider_for_session(&provider)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Record current IP in history so Impossible Travel is acknowledged and cleared
+    if let Some(provider_id) = auditor::ProviderId::from_id(&provider) {
+        if let Ok(tel) = auditor.resolver.resolve(false).await {
+            let entry = state::IpHistoryEntry::new(
+                tel.ip,
+                tel.country_code,
+                tel.asn,
+                tel.resolved_at,
+            );
+            let _ = state.record_ip_history(provider_id.as_str(), entry).await;
+        }
+    }
+
+    proxy_manager
+        .hold_queue
+        .resolve_all_for_provider(&provider, proxy::HoldResolution::Allow)
+        .await;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn unblock_provider_cmd(
+    provider: String,
+    state: tauri::State<'_, state::AppState>,
+    auditor: tauri::State<'_, auditor::Auditor>,
+) -> Result<(), String> {
+    state
+        .unblock_provider(&provider)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Also update IP history to current IP so a stale Impossible Travel doesn't immediately re-flag
+    if let Some(provider_id) = auditor::ProviderId::from_id(&provider) {
+        if let Ok(tel) = auditor.resolver.resolve(false).await {
+            let entry = state::IpHistoryEntry::new(
+                tel.ip,
+                tel.country_code,
+                tel.asn,
+                tel.resolved_at,
+            );
+            let _ = state.record_ip_history(provider_id.as_str(), entry).await;
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 async fn resolve_interception(
     id: String,
     action: proxy::InterceptionAction,
@@ -533,6 +593,8 @@ pub fn run() {
             pin_current_ip,
             unpin_ip,
             toggle_strict_pinning,
+            allow_provider_session,
+            unblock_provider_cmd,
             resolve_interception,
             simulate_interception,
             toggle_sysproxy,

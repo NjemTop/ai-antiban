@@ -17,9 +17,11 @@ import {
 import {
   AppStateData,
   ProviderId,
+  RiskInterceptPayload,
   RiskReport,
 } from "../types";
 import {
+  allowProviderSession,
   auditConnection,
   cleanAppCache,
   fetchAppState,
@@ -31,8 +33,10 @@ import {
   simulateInterception,
   toggleStrictPinning,
   toggleSysproxy,
+  unblockProvider,
   unpinIp,
 } from "../utils/api";
+import { AlertPopup } from "./AlertPopup";
 import { TrustRing } from "./TrustRing";
 import { ProviderMatrix } from "./ProviderMatrix";
 import { DeepAuditTab } from "./DeepAuditTab";
@@ -59,6 +63,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   const [sysproxyActive, setSysproxyActive] = useState<boolean>(false);
   const [copiedIp, setCopiedIp] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [interceptPayload, setInterceptPayload] = useState<RiskInterceptPayload | null>(null);
   const [initialGuideTarget, setInitialGuideTarget] = useState<string>("01-personal-vpn-15min");
   const [scenario, setScenario] = useState<MockScenario>(() => {
     const s = new URLSearchParams(window.location.search).get("scenario") as MockScenario | null;
@@ -142,6 +147,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
 
       listen("network://changed", () => {
         runFullAudit(false);
+      }).then((un) => unlisteners.push(un));
+
+      listen<RiskInterceptPayload>("interceptor://risk-detected", (event) => {
+        setInterceptPayload(event.payload);
       }).then((un) => unlisteners.push(un));
     }
 
@@ -232,6 +241,29 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
     }
   };
 
+  const handleAllowProvider = async (provider: ProviderId) => {
+    try {
+      await allowProviderSession(provider);
+      showToast(
+        "Доступ разрешен",
+        `Блокировка для ${provider === "anthropic" ? "Claude" : provider === "openai" ? "ChatGPT" : "Gemini"} снята на текущую сессию`,
+        "success"
+      );
+      await runFullAudit(false);
+    } catch (err: any) {
+      showToast("Ошибка", err?.message || String(err), "error");
+    }
+  };
+
+  const handleUnblockProvider = async (provider: ProviderId) => {
+    try {
+      await unblockProvider(provider);
+      await runFullAudit(false);
+    } catch (err: any) {
+      showToast("Ошибка", err?.message || String(err), "error");
+    }
+  };
+
   const handleCleanCache = async () => {
     try {
       const [res1, res2] = await Promise.all([
@@ -290,8 +322,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   const tzMismatch = activeReport?.timezone_result?.status && activeReport.timezone_result.status !== "green";
 
   return (
-    <div className="w-[380px] min-h-[560px] max-w-[380px] bg-[#0A0B0E] text-zinc-100 flex flex-col justify-between p-3 select-none font-sans border border-white/[0.08] rounded-xl shadow-2xl">
+    <div className="w-[380px] min-h-[560px] max-w-[380px] bg-[#0A0B0E] text-zinc-100 flex flex-col justify-between p-3 select-none font-sans border border-white/[0.08] rounded-xl shadow-2xl relative">
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+
+      {/* In-window Emergency Interception Overlay (guarantees user always sees hold prompt) */}
+      {interceptPayload && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-2">
+          <div className="scale-[0.78] origin-center">
+            <AlertPopup
+              initialPayload={interceptPayload}
+              onResolved={() => {
+                setInterceptPayload(null);
+                runFullAudit(false);
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Top Header */}
       <div>
@@ -341,7 +388,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                   AI-AntiBan
                 </h1>
                 <span className="text-[9px] px-1 py-0.2 rounded bg-zinc-900 border border-white/[0.07] text-zinc-400 font-mono tabular-nums">
-                  v1.0
+                  v1.0.1
                 </span>
               </div>
               <p className="text-[9.5px] text-zinc-500 leading-none mt-0.5">
@@ -355,7 +402,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
             <button
               type="button"
               onClick={handleToggleSysproxy}
-              title={sysproxyActive ? "Отключить системный PAC-перехват" : "Включить селективный PAC-перехват :8899"}
+              title={sysproxyActive ? "Отключить защиту трафика" : "Включить защиту трафика ИИ"}
               className={`flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-mono border transition-all cursor-pointer ${
                 sysproxyActive
                   ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300 font-semibold shadow-xs"
@@ -367,14 +414,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                   sysproxyActive ? "text-emerald-400 animate-pulse" : "text-zinc-500"
                 }`}
               />
-              <span>{sysproxyActive ? "PAC ВКЛ" : "PAC ВЫКЛ"}</span>
+              <span>{sysproxyActive ? "ЗАЩИТА ВКЛ" : "ЗАЩИТА ВЫКЛ"}</span>
             </button>
 
             <button
               type="button"
               disabled={refreshing}
               onClick={() => runFullAudit(true)}
-              title="Перепроверить соединение в обход кэша"
+              title="Перепроверить соединение"
               className="flex items-center gap-1 px-1.5 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-[10px] font-mono text-zinc-400 hover:text-white transition-colors cursor-pointer"
             >
               <RotateCw
@@ -396,7 +443,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                 : "text-zinc-400 hover:text-zinc-200"
             }`}
           >
-            Пульс
+            Главная
           </button>
 
           <button
@@ -408,7 +455,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                 : "text-zinc-400 hover:text-zinc-200"
             }`}
           >
-            Аудит (9)
+            Проверки (9)
           </button>
 
           <button
@@ -432,7 +479,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                 : "text-zinc-400 hover:text-zinc-200"
             }`}
           >
-            BIN Карты
+            Карты (BIN)
           </button>
         </nav>
 
@@ -444,7 +491,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
               <div className="bg-[#12141A] rounded-lg border border-white/[0.07] p-2.5 space-y-2">
                 <div className="flex items-center justify-between text-[10px] text-zinc-400 pb-1.5 border-b border-white/[0.04]">
                   <span className="uppercase tracking-wider font-semibold">
-                    Телеметрия узла выхода
+                    Ваш IP и соединение
                   </span>
                   <div className="flex items-center gap-1.5">
                     <span className={`w-1.5 h-1.5 rounded-full ${trayDotClass}`} />
@@ -516,8 +563,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                     <Pin className={`w-3 h-3 shrink-0 ${isPinned ? "text-emerald-400" : "text-zinc-500"}`} />
                     <span className="text-zinc-400 truncate font-mono">
                       {state?.pinned_ip
-                        ? `VPS: ${state.pinned_ip}`
-                        : "Эталонный VPS не закреплен"}
+                        ? `Мой IP: ${state.pinned_ip}`
+                        : "Личный IP не закреплен"}
                     </span>
                   </div>
 
@@ -563,12 +610,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                 reports={reports}
                 state={state}
                 onNavigateToGuide={() => setActiveTab("guide")}
+                onAllowProvider={handleAllowProvider}
+                onUnblockProvider={handleUnblockProvider}
               />
 
               {/* Quick Actions & Hygiene */}
               <div className="space-y-1.5">
                 <span className="text-[10px] tracking-wider uppercase text-zinc-400 font-semibold px-0.5">
-                  Быстрые действия и гигиена
+                  Быстрые действия
                 </span>
 
                 <div className="grid grid-cols-2 gap-1.5">

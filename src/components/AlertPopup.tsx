@@ -231,19 +231,23 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
 
         {/* Risk Trigger Items */}
         <div className="mt-2 space-y-1.5">
-          {/* Item 1: Geo / Travel */}
+          {/* Item 1: Primary Critical/Warning Reason (Geo, Travel, or Pinning) */}
           <div className="bg-[#12141A] rounded-lg p-2 border border-rose-500/30 space-y-0.5">
             <div className="flex items-center justify-between text-[10px]">
               <span className="text-rose-400 font-bold font-sans flex items-center gap-1">
                 <AlertOctagon className="w-3 h-3" strokeWidth={1.75} />
-                <span>[КРИТИЧНО] Гео-матрица / Юрисдикция IP</span>
+                <span>[ПРИЧИНА БЛОКА] Страна / Смена локации</span>
               </span>
               <span className="font-mono text-rose-300 font-semibold">
-                {report.telemetry.country_code} · Траст {report.trust_score}%
+                {report.telemetry.country_code} · {report.trust_score}%
               </span>
             </div>
             <div className="text-[11px] font-sans text-zinc-200 leading-snug line-clamp-2">
-              {report.geo_result.message}
+              {report.travel_result.status === "critical"
+                ? report.travel_result.message
+                : report.pinning_result.status === "critical"
+                ? report.pinning_result.message
+                : report.geo_result.message}
             </div>
           </div>
 

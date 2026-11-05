@@ -232,6 +232,25 @@ export async function toggleStrictPinning(enabled: boolean): Promise<void> {
   }
 }
 
+export async function allowProviderSession(provider: ProviderId): Promise<void> {
+  if (isTauri()) {
+    await invoke("allow_provider_session", { provider });
+  } else {
+    if (!mockState.session_allowed_providers.includes(provider)) {
+      mockState.session_allowed_providers.push(provider);
+    }
+    mockState.blocked_providers = mockState.blocked_providers.filter((p) => p !== provider);
+  }
+}
+
+export async function unblockProvider(provider: ProviderId): Promise<void> {
+  if (isTauri()) {
+    await invoke("unblock_provider_cmd", { provider });
+  } else {
+    mockState.blocked_providers = mockState.blocked_providers.filter((p) => p !== provider);
+  }
+}
+
 export async function cleanAppCache(provider: ProviderId): Promise<CleanResult> {
   if (isTauri()) {
     return await invoke<CleanResult>("clean_app_cache", { provider });

@@ -1,7 +1,7 @@
 use crate::auditor::geo_matrix::{CheckResult, ProviderId, GUIDE_PERSONAL_VPN};
 use crate::state::IpHistoryEntry;
 
-pub const IMPOSSIBLE_TRAVEL_WINDOW_SECS: u64 = 12 * 3600; // 12 hours
+pub const IMPOSSIBLE_TRAVEL_WINDOW_SECS: u64 = 4 * 3600; // 4 hours
 
 /// Evaluates IP Pinning rule.
 pub fn evaluate_ip_pinning(
@@ -101,7 +101,7 @@ pub fn evaluate_impossible_travel(
 
     CheckResult::ok(
         "TRAVEL_NORMAL",
-        "География сессий стабильна (без резких смен локации за 12ч).",
+        "География сессий стабильна (без резких смен страны за 4ч).",
     )
 }
 
@@ -147,9 +147,9 @@ mod tests {
         let res_same = evaluate_impossible_travel(&history, "DE", now, ProviderId::Anthropic);
         assert_eq!(res_same.status, CheckStatus::Ok);
 
-        // DE to US after 15 hours (>12h) -> Ok
-        let fifteen_hours_ago = now - (15 * 3600);
-        let history_old = vec![IpHistoryEntry::new("1.1.1.1", "DE", Some(1234), fifteen_hours_ago)];
+        // DE to US after 5 hours (>4h) -> Ok
+        let five_hours_ago = now - (5 * 3600);
+        let history_old = vec![IpHistoryEntry::new("1.1.1.1", "DE", Some(1234), five_hours_ago)];
         let res_old = evaluate_impossible_travel(&history_old, "US", now, ProviderId::Anthropic);
         assert_eq!(res_old.status, CheckStatus::Ok);
     }

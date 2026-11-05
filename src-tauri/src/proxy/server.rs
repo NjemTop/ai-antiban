@@ -218,11 +218,17 @@ impl ProxyServer {
 
         // Emit event to UI and bring emergency modal to front
         if let Some(app) = &self.app_handle {
+            let _ = app.emit("interceptor://risk-detected", &payload);
             if let Some(popup) = app.get_webview_window("alert-popup") {
                 let _ = popup.show();
+                let _ = popup.unminimize();
+                let _ = popup.set_always_on_top(true);
+                let _ = popup.center();
                 let _ = popup.set_focus();
+            } else if let Some(main_win) = app.get_webview_window("main") {
+                let _ = main_win.show();
+                let _ = main_win.set_focus();
             }
-            let _ = app.emit("interceptor://risk-detected", &payload);
         }
 
         // Wait up to 60 seconds for user action
