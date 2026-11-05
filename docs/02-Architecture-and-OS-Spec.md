@@ -7,7 +7,7 @@
 * **Ядро и системный демон (Backend):** **Rust (Tauri v2 Core + Tokio)**
   * *Почему Rust:* Нативная производительность, отсутствие сборщика мусора, минимальное потребление ОЗУ в фоне (~15–25 МБ), идеальная поддержка асинхронного TCP-проксирования (`tokio::net::TcpListener`), прямой доступ к системным вызовам macOS (`networksetup`, `scutil`) и Windows (`winreg`, `WinInet` API).
 * **Пользовательский интерфейс (Frontend):** **React 18 + TypeScript + TailwindCSS (Vite)** внутри нативного WebView (WebKit на macOS, WebView2 на Windows).
-* **Размер дистрибутива:** ~4–7 МБ (`.dmg` для macOS Universal, `.msi` / `.exe` для Windows x64/ARM64).
+* **Размер дистрибутива:** ~4–7 МБ (нативные бандлы для macOS и Windows).
 * **Локальное хранилище состояния:** Локальный JSON-конфиг в пользовательской директории (`~/Library/Application Support/com.zastava.app/state.json` на macOS, `%APPDATA%\com.zastava.app\state.json` на Windows).
 
 ---

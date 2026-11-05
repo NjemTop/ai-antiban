@@ -122,7 +122,7 @@
 
 ### Задачи:
 - [x] **TASK-6.1:** Создать GitHub Actions workflow (`.github/workflows/release.yml`) на базе `tauri-apps/tauri-action`:
-  - Матрица сборки: `macos-latest` (Universal `.dmg` и `.app`) и `windows-latest` (`.msi` и `.exe` NSIS).
+  - Матрица сборки: `macos-latest` (macOS нативные пакеты) и `windows-latest` (Windows нативные пакеты).
 
 ---
 

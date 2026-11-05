@@ -81,8 +81,7 @@ jobs:
           releaseName: 'Zastava ${{ github.ref_name }}'
           releaseBody: |
             ## Застава ${{ github.ref_name }} — Интеллектуальный сетевой шлюз
-            - **macOS (Apple Silicon & Intel)**: скачайте `.dmg`, перетащите в `Applications`, при первом запуске выполните `xattr -cr /Applications/Zastava.app`
-            - **Windows (10/11 x64)**: скачайте `.exe` (NSIS) или `.msi` установщик
+            Открытый локальный шлюз и монитор стабильности подключений для безопасной работы с облачными платформами.
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
