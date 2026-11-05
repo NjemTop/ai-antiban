@@ -10,8 +10,9 @@ import {
   Lock,
   Terminal,
   Award,
+  Send,
 } from "lucide-react";
-import { openExternal } from "../utils/opener";
+import { openExternal, openTelegramSupport } from "../utils/opener";
 
 interface GuideViewerProps {
   initialGuide?: string;
@@ -430,6 +431,29 @@ export const GuideViewer: React.FC<GuideViewerProps> = ({
           </div>
         </div>
       )}
+
+      {/* Direct Contact Banner */}
+      <div className="bg-gradient-to-r from-sky-500/10 to-indigo-500/10 rounded-lg border border-sky-500/20 p-2.5 flex items-center justify-between gap-2 mt-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-6 h-6 rounded-md bg-sky-500/15 text-sky-400 flex items-center justify-center shrink-0">
+            <Send className="w-3.5 h-3.5" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[11px] font-bold text-zinc-100">Нужна помощь или консультация?</div>
+            <div className="text-[10px] text-zinc-400 truncate">Поддержка и связь с разработчиком в Telegram</div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            if (onToast) onToast("Поддержка", "Переход в Telegram: @nomadnocode", "info");
+            openTelegramSupport();
+          }}
+          className="shrink-0 px-2 py-1 rounded-md bg-sky-500 hover:bg-sky-400 text-zinc-950 font-bold text-[10px] flex items-center gap-1 transition-all cursor-pointer"
+        >
+          <span>@nomadnocode</span>
+        </button>
+      </div>
     </div>
   );
 };

@@ -177,12 +177,9 @@ impl ProxyServer {
         let provider = match provider_opt {
             Some(p) => p,
             None => {
-                // Reject non-AI domains on local proxy to prevent open-proxy SSRF abuse
-                return send_forbidden(
-                    client,
-                    "Zastava local gateway only routes authorized AI provider domains.",
-                )
-                .await;
+                // Direct pass-through for non-AI domains: allows terminal users to set
+                // HTTPS_PROXY=http://127.0.0.1:8899 safely without breaking git, npm, brew, etc.
+                return self.tunnel_to_target(client, &host, port).await;
             }
         };
 

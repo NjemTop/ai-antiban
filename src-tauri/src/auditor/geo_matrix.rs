@@ -69,11 +69,13 @@ impl ProviderId {
             return Some(ProviderId::Openai);
         }
 
-        // 3. Google Gemini / AI Studio
+        // 3. Google Gemini / AI Studio / Vertex AI / Cloud AI Companion (Antigravity, Orca)
         if host == "gemini.google.com"
             || host == "aistudio.google.com"
             || host == "makersuite.google.com"
             || host == "generativelanguage.googleapis.com"
+            || host == "aiplatform.googleapis.com"
+            || host == "cloudaicompanion.googleapis.com"
             || host.ends_with(".clients6.google.com")
         {
             return Some(ProviderId::Gemini);

@@ -12,6 +12,8 @@ pub const DEFAULT_AI_DOMAINS: &[&str] = &[
     "aistudio.google.com",
     "makersuite.google.com",
     "generativelanguage.googleapis.com",
+    "aiplatform.googleapis.com",
+    "cloudaicompanion.googleapis.com",
     "alkalimakersuite-pa.clients6.google.com",
 ];
 

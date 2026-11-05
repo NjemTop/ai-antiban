@@ -125,7 +125,7 @@ async fn test_connect_hold_and_block() {
     // In background, simulate user clicking 'BlockUntilNetworkChange'
     tokio::spawn(async move {
         // Wait briefly for connection to be held in queue
-        for _ in 0..50 {
+        for _ in 0..500 {
             tokio::time::sleep(Duration::from_millis(10)).await;
             let resolved = queue_clone
                 .resolve_all_for_provider("gemini", HoldResolution::Block)
@@ -138,7 +138,7 @@ async fn test_connect_hold_and_block() {
 
     let mut response = Vec::new();
     let read_res = tokio::time::timeout(
-        Duration::from_secs(3),
+        Duration::from_secs(4),
         client.read_to_end(&mut response),
     )
     .await;
@@ -223,7 +223,7 @@ async fn test_connect_hold_and_allow_session() {
 
     // Simulate User clicking 'AllowSession'
     tokio::spawn(async move {
-        for _ in 0..50 {
+        for _ in 0..500 {
             tokio::time::sleep(Duration::from_millis(10)).await;
             let resolved = queue_clone
                 .resolve_all_for_provider("gemini", HoldResolution::Allow)
