@@ -100,12 +100,14 @@ async fn audit_all(ctx: &GuardCtx) -> Result<Vec<RiskReport>, String> {
     Ok(vec![anthropic, openai?, gemini?])
 }
 
-/// Waits until the gate is open. Returns `false` when the stall limit is exceeded.
+/// Waits until the gate is open. Returns `false` immediately when blocked or stall limit is exceeded.
 pub async fn wait_open(rx: &mut watch::Receiver<Gate>) -> bool {
     let fut = async {
         loop {
-            if *rx.borrow_and_update() == Gate::Open {
-                return true;
+            match *rx.borrow_and_update() {
+                Gate::Open => return true,
+                Gate::Blocked => return false,
+                Gate::Pending => {}
             }
             if rx.changed().await.is_err() {
                 return false;
@@ -529,5 +531,13 @@ mod tests {
         });
 
         assert_eq!(guard.await_decision().await, Gate::Blocked);
+    }
+
+    #[tokio::test]
+    async fn test_wait_open_returns_false_immediately_on_blocked() {
+        let guard = NetworkGuard::new();
+        guard.set_gate(Gate::Blocked);
+        let mut rx = guard.subscribe();
+        assert!(!wait_open(&mut rx).await);
     }
 }

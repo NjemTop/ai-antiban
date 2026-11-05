@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Send,
+  Terminal,
 } from "lucide-react";
 import {
   AppStateData,
@@ -64,6 +65,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   const [scanLatencyMs, setScanLatencyMs] = useState<number>(42);
   const [sysproxyActive, setSysproxyActive] = useState<boolean>(true);
   const [copiedIp, setCopiedIp] = useState<boolean>(false);
+  const [copiedCli, setCopiedCli] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [interceptPayload, setInterceptPayload] = useState<RiskInterceptPayload | null>(null);
   const [initialGuideTarget, setInitialGuideTarget] = useState<string>("01-personal-vpn-15min");
@@ -184,6 +186,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
       setCopiedIp(true);
       showToast("IP скопирован", currentIp, "success");
       setTimeout(() => setCopiedIp(false), 2000);
+    }
+  };
+
+  const handleCopyCliProxy = async () => {
+    const cmd = 'export HTTP_PROXY="http://127.0.0.1:8899" HTTPS_PROXY="http://127.0.0.1:8899" ALL_PROXY="http://127.0.0.1:8899"';
+    try {
+      await navigator.clipboard.writeText(cmd);
+      setCopiedCli(true);
+      showToast(
+        "Команда CLI скопирована",
+        "Вставьте в терминал или в ~/.zshrc для защиты OpenCode, Antigravity, Claude Code",
+        "success"
+      );
+      setTimeout(() => setCopiedCli(false), 2500);
+    } catch {
+      showToast("Ошибка копирования", cmd, "error");
     }
   };
 
@@ -642,7 +660,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                   Быстрые действия
                 </span>
 
-                <div className="grid grid-cols-2 gap-1.5">
+                <div className="grid grid-cols-3 gap-1.5">
                   <button
                     type="button"
                     onClick={handleCleanCache}
@@ -650,10 +668,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                   >
                     <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200 group-hover:text-emerald-400 transition-colors">
                       <Trash2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" strokeWidth={1.75} />
-                      <span className="truncate">Очистить кэш ИИ</span>
+                      <span className="truncate">Сброс кэша</span>
                     </div>
                     <div className="text-[9.5px] text-zinc-500 mt-0.5 truncate leading-tight">
-                      Сброс ID Claude / ChatGPT
+                      ID Claude / ChatGPT
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleCopyCliProxy}
+                    className="p-2 rounded-lg bg-[#12141A] hover:bg-zinc-900 border border-white/[0.07] hover:border-white/[0.15] text-left transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200 group-hover:text-sky-400 transition-colors">
+                      <Terminal className="w-3.5 h-3.5 text-sky-400 shrink-0" strokeWidth={1.75} />
+                      <span className="truncate">{copiedCli ? "Скопировано!" : "Защита CLI"}</span>
+                    </div>
+                    <div className="text-[9.5px] text-zinc-500 mt-0.5 truncate leading-tight">
+                      OpenCode / Терминал
                     </div>
                   </button>
 
@@ -664,10 +696,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                   >
                     <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200 group-hover:text-amber-400 transition-colors">
                       <FlaskConical className="w-3.5 h-3.5 text-amber-400 shrink-0" strokeWidth={1.75} />
-                      <span className="truncate">Тест перехвата</span>
+                      <span className="truncate">Тест HOLD</span>
                     </div>
                     <div className="text-[9.5px] text-zinc-500 mt-0.5 truncate leading-tight">
-                      Симуляция 403 / окна HOLD
+                      Симуляция 403
                     </div>
                   </button>
                 </div>

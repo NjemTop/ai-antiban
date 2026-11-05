@@ -428,6 +428,27 @@ export const GuideViewer: React.FC<GuideViewerProps> = ({
                 На macOS: Настройки сети → Wi-Fi → Подробно → TCP/IP → Конфигурация IPv6: выберите «Только локальная ссылка (Link-Local Only)». На Windows снимите галочку с «IP версии 6 (TCP/IPv6)» в свойствах адаптера.
               </p>
             </div>
+
+            <div className="bg-[#12141A] rounded-lg border border-white/[0.07] p-2.5 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-sans font-bold text-zinc-100">
+                  Защита консольных ИИ-агентов (OpenCode, Claude Code, Antigravity)
+                </span>
+                <span className="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 text-[9.5px] font-mono font-semibold">
+                  CLI & ДЕМОНЫ
+                </span>
+              </div>
+              <p className="text-[11px] font-sans text-zinc-400 leading-relaxed">
+                Консольные утилиты не читают PAC-настройки браузеров. Чтобы защитить сессии терминальных агентов от утечки IP при смене VPN, направьте их через шлюз Zastava:
+              </p>
+              <div className="p-1.5 bg-black/40 rounded border border-white/[0.05] font-mono text-[10px] text-zinc-300 select-all space-y-0.5">
+                <div>export HTTPS_PROXY=http://127.0.0.1:8899</div>
+                <div>opencode service set env HTTPS_PROXY http://127.0.0.1:8899</div>
+              </div>
+              <p className="text-[10px] text-zinc-500">
+                Не-ИИ трафик (git, npm, brew) проходит через шлюз Zastava прозрачно и без задержек.
+              </p>
+            </div>
           </div>
         </div>
       )}
