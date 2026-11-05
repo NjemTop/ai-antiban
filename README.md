@@ -77,17 +77,18 @@
 
 ### 🍏 macOS (Apple Silicon `M1/M2/M3/M4` и Intel)
 
-1. Скачайте файл **`AI-AntiBan_1.0.0_aarch64.dmg`** (или `.app.tar.gz`) со страницы [последнего релиза](https://github.com/kingbest1195/ai-antiban/releases/latest).
+1. Скачайте файл **`AI-AntiBan_1.0.1_aarch64.dmg`** (или `.app.tar.gz`) со страницы [последнего релиза](https://github.com/kingbest1195/ai-antiban/releases/latest).
 2. Перетащите **AI-AntiBan.app** в папку `Applications` (`Программы`).
 3. Так как приложение распространяется как открытый исходный код (Open Source) без платной подписки Apple Developer ID, при первом запуске снимите карантин Gatekeeper одной командой в Терминале:
    ```bash
    xattr -cr /Applications/AI-AntiBan.app
    ```
+   > Если macOS пишет **«AI-AntiBan.app повреждён и не может быть открыт»** — это не поломка файла, а карантин Gatekeeper на скачанных из браузера приложениях без Apple Developer ID. Команда выше его снимает. Если приложение лежит не в `Applications`, укажите свой путь.
 4. Запустите **AI-AntiBan** — в верхней строке меню (Menu Bar) появится иконка щита и живой статус вашего соединения (`NL · 98%`).
 
 ### 🪟 Windows (10 / 11 x64)
 
-1. Скачайте установщик **`AI-AntiBan_1.0.0_x64-setup.exe`** или **`AI-AntiBan_1.0.0_x64_en-US.msi`** со страницы [Releases](https://github.com/kingbest1195/ai-antiban/releases/latest).
+1. Скачайте установщик **`AI-AntiBan_1.0.1_x64-setup.exe`** или **`AI-AntiBan_1.0.1_x64_en-US.msi`** со страницы [Releases](https://github.com/kingbest1195/ai-antiban/releases/latest).
 2. Запустите установщик (при появлении окна SmartScreen нажмите *«Подробнее» → «Выполнить в любом случае»*).
 3. Иконка **AI-AntiBan** появится в системном трее рядом с часами.
 
