@@ -1,8 +1,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Once;
+use std::sync::{Mutex, Once};
 
 static SYS_PROXY_ACTIVE: AtomicBool = AtomicBool::new(false);
 static CLEAN_HOOK_INIT: Once = Once::new();
+static LAST_PAC_URL: Mutex<Option<String>> = Mutex::new(None);
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+static KNOWN_SERVICES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SysproxyStatus {
@@ -52,6 +55,9 @@ pub fn disable_all_sysproxy() {
     }
 
     SYS_PROXY_ACTIVE.store(false, Ordering::SeqCst);
+    if let Ok(mut g) = LAST_PAC_URL.lock() {
+        *g = None;
+    }
 }
 
 /// Enables systemic PAC proxy with the given PAC URL (e.g. "http://127.0.0.1:8899/proxy.pac").
@@ -62,6 +68,9 @@ pub fn enable_sysproxy(pac_url: &str) -> Result<SysproxyStatus, String> {
     #[cfg(target_os = "macos")]
     {
         let services = get_macos_network_services().map_err(|e| e.to_string())?;
+        if let Ok(mut known) = KNOWN_SERVICES.lock() {
+            *known = services.clone();
+        }
         for service in services {
             // Set autoproxy URL
             let output_url = std::process::Command::new("networksetup")
@@ -102,6 +111,9 @@ pub fn enable_sysproxy(pac_url: &str) -> Result<SysproxyStatus, String> {
     }
 
     SYS_PROXY_ACTIVE.store(true, Ordering::SeqCst);
+    if let Ok(mut g) = LAST_PAC_URL.lock() {
+        *g = Some(pac_url.to_string());
+    }
 
     Ok(SysproxyStatus {
         enabled: true,
@@ -142,6 +154,30 @@ fn notify_windows_inet_refresh() {
 /// Returns whether systemic PAC proxy is currently active.
 pub fn is_sysproxy_active() -> bool {
     SYS_PROXY_ACTIVE.load(Ordering::SeqCst)
+}
+
+/// Re-applies the PAC configuration when a new network service appeared (e.g. a VPN client
+/// added its own service), otherwise that service would bypass the interceptor.
+/// Returns `true` when the configuration was re-applied.
+pub fn refresh_if_services_changed() -> bool {
+    if !is_sysproxy_active() {
+        return false;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let pac = LAST_PAC_URL.lock().ok().and_then(|g| g.clone());
+        if let (Some(pac), Ok(mut services)) = (pac, get_macos_network_services()) {
+            let mut known = KNOWN_SERVICES.lock().map(|g| g.clone()).unwrap_or_default();
+            services.sort();
+            known.sort();
+            if services != known {
+                return enable_sysproxy(&pac).is_ok();
+            }
+        }
+    }
+
+    false
 }
 
 #[cfg(target_os = "macos")]

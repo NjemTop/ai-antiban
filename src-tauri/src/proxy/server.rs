@@ -2,12 +2,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
 use crate::auditor::geo_matrix::ProviderId;
 use crate::auditor::{Auditor, OverallStatus};
+use crate::proxy::guard::{gate_closed, wait_open, Gate, NetworkGuard};
 use crate::proxy::hold_queue::{
     HoldQueue, HoldResolution, RiskInterceptPayload, DEFAULT_HOLD_TTL_SECS,
 };
@@ -16,6 +17,8 @@ use crate::state::{AppState, IpHistoryEntry};
 
 pub const DEFAULT_PROXY_PORT: u16 = 8899;
 pub const FALLBACK_PROXY_PORT: u16 = 8900;
+const FIRST_REQUEST_TIMEOUT_SECS: u64 = 10;
+const UPSTREAM_CONNECT_TIMEOUT_SECS: u64 = 15;
 
 pub struct ProxyServer {
     pub bound_addr: SocketAddr,
@@ -23,6 +26,7 @@ pub struct ProxyServer {
     auditor: Auditor,
     state: AppState,
     pub hold_queue: Arc<HoldQueue>,
+    pub guard: Arc<NetworkGuard>,
     app_handle: Option<tauri::AppHandle>,
     pub upstream_redirect: Option<SocketAddr>,
 }
@@ -51,6 +55,7 @@ impl ProxyServer {
             auditor,
             state,
             hold_queue,
+            guard: Arc::new(NetworkGuard::new()),
             app_handle,
             upstream_redirect: None,
         })
@@ -72,6 +77,7 @@ impl ProxyServer {
             auditor,
             state,
             hold_queue,
+            guard: Arc::new(NetworkGuard::new()),
             app_handle: None,
             upstream_redirect,
         })
@@ -103,7 +109,15 @@ impl ProxyServer {
         _client_addr: SocketAddr,
     ) -> Result<(), std::io::Error> {
         let mut buffer = [0u8; 4096];
-        let bytes_read = client.read(&mut buffer).await?;
+        let bytes_read = match tokio::time::timeout(
+            Duration::from_secs(FIRST_REQUEST_TIMEOUT_SECS),
+            client.read(&mut buffer),
+        )
+        .await
+        {
+            Ok(res) => res?,
+            Err(_) => return Ok(()), // idle / slow client: drop silently
+        };
         if bytes_read == 0 {
             return Ok(());
         }
@@ -172,6 +186,29 @@ impl ProxyServer {
             }
         };
 
+        // Step 0: Network guard — a sudden IP change freezes every connection until the
+        // user confirms the new network (or the old IP comes back).
+        self.guard.ensure_fresh().await;
+        match self.guard.gate() {
+            Gate::Open => {}
+            Gate::Pending => {
+                if self.guard.await_decision().await != Gate::Open {
+                    return send_forbidden(
+                        client,
+                        "Network change blocked by AI-AntiBan Risk Auditor: connection was not confirmed.",
+                    )
+                    .await;
+                }
+            }
+            Gate::Blocked => {
+                return send_forbidden(
+                    client,
+                    "Network change blocked by AI-AntiBan Risk Auditor: switch back to the trusted IP or confirm the new network.",
+                )
+                .await;
+            }
+        }
+
         // Step 1: Check if provider is blocked
         if self.state.is_provider_blocked(provider.as_str()).await {
             return send_forbidden(client, "Requests to this provider are blocked until network change.").await;
@@ -214,6 +251,8 @@ impl ProxyServer {
             host: host.clone(),
             report: report.clone(),
             ttl_seconds: DEFAULT_HOLD_TTL_SECS,
+            scope: "provider".to_string(),
+            network_change: None,
         };
 
         // Emit event to UI and bring emergency modal to front
@@ -264,9 +303,24 @@ impl ProxyServer {
         host: &str,
         port: u16,
     ) -> Result<(), std::io::Error> {
-        let connect_fut = match self.upstream_redirect {
-            Some(redirect_addr) => TcpStream::connect(redirect_addr).await,
-            None => TcpStream::connect((host, port)).await,
+        let connect_res = match self.upstream_redirect {
+            Some(redirect_addr) => tokio::time::timeout(
+                Duration::from_secs(UPSTREAM_CONNECT_TIMEOUT_SECS),
+                TcpStream::connect(redirect_addr),
+            )
+            .await,
+            None => tokio::time::timeout(
+                Duration::from_secs(UPSTREAM_CONNECT_TIMEOUT_SECS),
+                TcpStream::connect((host, port)),
+            )
+            .await,
+        };
+        let connect_fut = match connect_res {
+            Ok(res) => res,
+            Err(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "upstream connect timeout",
+            )),
         };
 
         let mut target_stream = match connect_fut {
@@ -289,8 +343,64 @@ impl ProxyServer {
             .await?;
         client.flush().await?;
 
-        tokio::io::copy_bidirectional(client, &mut target_stream).await?;
-        Ok(())
+        pump(client, &mut target_stream, &self.guard).await
+    }
+}
+
+/// Bidirectional relay that obeys the network guard: while the gate is closed no byte is
+/// forwarded in either direction, so established sessions simply "hang" like a dead network
+/// and are dropped after `MAX_STALL_SECS` unless the user confirms the new network.
+async fn pump(
+    client: &mut TcpStream,
+    target: &mut TcpStream,
+    guard: &Arc<NetworkGuard>,
+) -> Result<(), std::io::Error> {
+    let (mut cr, mut cw) = client.split();
+    let (mut tr, mut tw) = target.split();
+    let c2t = forward(&mut cr, &mut tw, guard);
+    let t2c = forward(&mut tr, &mut cw, guard);
+    tokio::try_join!(c2t, t2c)?;
+    Ok(())
+}
+
+async fn forward<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    guard: &Arc<NetworkGuard>,
+) -> Result<(), std::io::Error>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut rx = guard.subscribe();
+    let mut buf = vec![0u8; 16 * 1024];
+    let stalled = || {
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "tunnel stalled: network change not confirmed",
+        )
+    };
+
+    loop {
+        if !wait_open(&mut rx).await {
+            return Err(stalled());
+        }
+
+        let n = tokio::select! {
+            res = reader.read(&mut buf) => res?,
+            _ = gate_closed(&mut rx) => continue,
+        };
+
+        if n == 0 {
+            let _ = writer.shutdown().await;
+            return Ok(());
+        }
+
+        // Data read right before the freeze is held back until the user decides.
+        if !wait_open(&mut rx).await {
+            return Err(stalled());
+        }
+        writer.write_all(&buf[..n]).await?;
     }
 }
 

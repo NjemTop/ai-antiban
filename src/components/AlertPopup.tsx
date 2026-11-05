@@ -149,7 +149,12 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
     setResolving(true);
 
     try {
-      await resolveInterception(payload.id, action, payload.provider);
+      await resolveInterception(
+        payload.id,
+        action,
+        payload.provider,
+        payload.scope
+      );
       if (onResolved) onResolved(action);
     } catch (err) {
       console.error("Failed to resolve interception:", err);
@@ -176,7 +181,8 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [payload, resolving]);
 
-  const { report } = payload;
+  const { report, network_change, scope } = payload;
+  const isNetworkChange = scope === "network" || !!network_change;
 
   return (
     <div className="w-[480px] h-[440px] max-h-screen bg-[#0A0B0E] text-zinc-100 flex flex-col justify-between border border-white/[0.1] border-t-2 border-t-rose-500 rounded-xl p-4 select-none overflow-hidden shadow-2xl">
@@ -189,13 +195,15 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500" />
             </span>
             <span className="text-xs font-bold uppercase tracking-wider text-rose-400 font-sans">
-              ПЕРЕХВАТ ОПАСНОГО ЗАПРОСА
+              {isNetworkChange
+                ? "ОБНАРУЖЕНА РЕЗКАЯ СМЕНА СЕТИ (IP)"
+                : "ПЕРЕХВАТ ОПАСНОГО ЗАПРОСА"}
             </span>
           </div>
 
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-mono text-zinc-400 tracking-wider">
-              ПАКЕТ НА ПАУЗЕ
+              {isNetworkChange ? "ТРАФИК НА ПАУЗЕ" : "ПАКЕТ НА ПАУЗЕ"}
             </span>
             <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[10px] font-mono font-bold tabular-nums">
               <Clock className="w-3 h-3 text-rose-400" strokeWidth={1.75} />
@@ -208,10 +216,12 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
         <div className="mt-2.5 flex items-center justify-between text-xs bg-[#12141A] px-2.5 py-1.5 rounded-lg border border-white/[0.06]">
           <div className="flex items-center gap-2 truncate">
             <span className="text-[10px] font-sans uppercase tracking-wider text-zinc-500 font-semibold">
-              Цель:
+              {isNetworkChange ? "Смена:" : "Цель:"}
             </span>
             <span className="text-zinc-100 font-mono text-[11.5px] font-semibold truncate">
-              {payload.host}
+              {isNetworkChange && network_change
+                ? `${network_change.old_ip || "?"} (${network_change.old_country || "?"}) ➔ ${network_change.new_ip} (${network_change.new_country})`
+                : payload.host}
             </span>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -219,14 +229,16 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
               IP: {report.telemetry.ip} ({report.telemetry.country_code})
             </span>
             <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-white/[0.08] text-[9.5px] font-mono uppercase text-amber-400 font-semibold">
-              {payload.provider}
+              {isNetworkChange ? "ВСЕ СЕРВИСЫ" : payload.provider}
             </span>
           </div>
         </div>
 
         {/* Advisory Subtitle */}
         <div className="mt-2 text-[11px] font-sans text-zinc-400 leading-snug">
-          Соединение заморожено до отправки на сервер ИИ. Выявлены триггеры блокировки аккаунта:
+          {isNetworkChange
+            ? "Обнаружена смена IP-адреса. Все активные сессии и запросы заморожены (как обрыв связи), чтобы защитить аккаунты от бана:"
+            : "Соединение заморожено до отправки на сервер ИИ. Выявлены триггеры блокировки аккаунта:"}
         </div>
 
         {/* Risk Trigger Items */}
@@ -316,7 +328,11 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
             className="py-2 px-2.5 rounded-lg bg-[#12141A] hover:bg-zinc-900 border border-rose-500/30 hover:border-rose-500/50 text-rose-300 text-[11px] font-sans font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
           >
             <ShieldX className="w-3.5 h-3.5 shrink-0 text-rose-400" strokeWidth={1.75} />
-            <span className="truncate">3. Блокировать до смены сети</span>
+            <span className="truncate">
+              {isNetworkChange
+                ? "3. Блокировать до возврата на прошлый IP"
+                : "3. Блокировать до смены сети"}
+            </span>
           </button>
 
           {/* Action 2: Accept risk and continue */}
@@ -326,7 +342,11 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
             onClick={() => handleAction("AllowSession")}
             className="py-2 px-2.5 rounded-lg bg-[#12141A] hover:bg-zinc-900 border border-white/[0.08] hover:border-white/[0.18] text-zinc-300 text-[11px] font-sans font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
           >
-            <span className="truncate">2. Принять риск и продолжить</span>
+            <span className="truncate">
+              {isNetworkChange
+                ? "2. Подтвердить новую сеть и продолжить"
+                : "2. Принять риск и продолжить"}
+            </span>
           </button>
         </div>
       </div>

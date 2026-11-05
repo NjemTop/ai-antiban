@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
-pub const CACHE_TTL_SECONDS: u64 = 30;
+pub const CACHE_TTL_SECONDS: u64 = 15;
 pub const REQUEST_TIMEOUT_MS: u64 = 1500;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -77,6 +77,9 @@ impl NetworkResolver {
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(REQUEST_TIMEOUT_MS))
+            // Fresh socket per lookup: a pooled keep-alive connection could still use the old route
+            // after a VPN switch and report the previous IP / ASN.
+            .pool_max_idle_per_host(0)
             .user_agent("AI-AntiBan/1.0")
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());

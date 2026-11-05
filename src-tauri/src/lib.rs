@@ -30,7 +30,7 @@ pub fn update_tray_from_report(
         let score = report.trust_score;
 
         let (icon_bytes, status_label, dot) = if has_blocked {
-            (TRAY_ICON_RED, format!(" {country} · HOLD"), "🔴")
+            (TRAY_ICON_RED, format!(" {country} · ПАУЗА"), "🔴")
         } else {
             match report.overall_status {
                 auditor::OverallStatus::Green => {
@@ -75,6 +75,7 @@ async fn audit_connection(
     provider: String,
     state: tauri::State<'_, state::AppState>,
     auditor: tauri::State<'_, auditor::Auditor>,
+    guard: tauri::State<'_, std::sync::Arc<proxy::NetworkGuard>>,
     app: tauri::AppHandle,
     force_refresh: Option<bool>,
 ) -> Result<auditor::RiskReport, String> {
@@ -92,7 +93,8 @@ async fn audit_connection(
             .as_ref()
             .map(|p| p.trim() == report.telemetry.ip.trim())
             .unwrap_or(false);
-        let has_blocked = !st.blocked_providers.is_empty();
+        let has_blocked =
+            !st.blocked_providers.is_empty() || guard.gate() != proxy::Gate::Open;
         update_tray_from_report(&app, &report, is_pinned, has_blocked);
     }
 
@@ -165,6 +167,9 @@ async fn allow_provider_session(
         .resolve_all_for_provider(&provider, proxy::HoldResolution::Allow)
         .await;
 
+    // If traffic was frozen after a network change, the user's manual confirmation resumes it
+    proxy_manager.guard.accept_current().await;
+
     Ok(())
 }
 
@@ -200,48 +205,70 @@ async fn resolve_interception(
     id: String,
     action: proxy::InterceptionAction,
     provider: String,
+    scope: Option<String>,
     proxy_manager: tauri::State<'_, proxy::ProxyManager>,
     state: tauri::State<'_, state::AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    // `all` or scope "network" = network-wide hold created by the network guard after a sudden IP change
+    let is_network_scope = scope.as_deref() == Some("network") || provider == proxy::ALL_PROVIDERS;
+    let targets: Vec<String> = if is_network_scope {
+        state::KNOWN_PROVIDERS.iter().map(|p| p.to_string()).collect()
+    } else {
+        vec![provider.clone()]
+    };
+
     match action {
         proxy::InterceptionAction::AllowSession => {
-            state
-                .allow_provider_for_session(&provider)
-                .await
-                .map_err(|e| e.to_string())?;
+            for p in &targets {
+                state
+                    .allow_provider_for_session(p)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
             proxy_manager
                 .hold_queue
                 .resolve(&id, proxy::HoldResolution::Allow)
                 .await;
-            proxy_manager
-                .hold_queue
-                .resolve_all_for_provider(&provider, proxy::HoldResolution::Allow)
-                .await;
+            for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
+                proxy_manager
+                    .hold_queue
+                    .resolve_all_for_provider(p, proxy::HoldResolution::Allow)
+                    .await;
+            }
+            if is_network_scope {
+                proxy_manager.guard.accept_current().await;
+            }
         }
         proxy::InterceptionAction::BlockUntilNetworkChange => {
-            state
-                .block_provider(&provider)
-                .await
-                .map_err(|e| e.to_string())?;
+            for p in &targets {
+                state.block_provider(p).await.map_err(|e| e.to_string())?;
+            }
             proxy_manager
                 .hold_queue
                 .resolve(&id, proxy::HoldResolution::Block)
                 .await;
-            proxy_manager
-                .hold_queue
-                .resolve_all_for_provider(&provider, proxy::HoldResolution::Block)
-                .await;
+            for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
+                proxy_manager
+                    .hold_queue
+                    .resolve_all_for_provider(p, proxy::HoldResolution::Block)
+                    .await;
+            }
         }
         proxy::InterceptionAction::OpenGuideAndBlock => {
+            for p in &targets {
+                state.block_provider(p).await.map_err(|e| e.to_string())?;
+            }
             proxy_manager
                 .hold_queue
                 .resolve(&id, proxy::HoldResolution::Block)
                 .await;
-            proxy_manager
-                .hold_queue
-                .resolve_all_for_provider(&provider, proxy::HoldResolution::Block)
-                .await;
+            for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
+                proxy_manager
+                    .hold_queue
+                    .resolve_all_for_provider(p, proxy::HoldResolution::Block)
+                    .await;
+            }
             if let Some(main_win) = app.get_webview_window("main") {
                 let _ = main_win.show();
                 let _ = main_win.set_focus();
@@ -253,6 +280,7 @@ async fn resolve_interception(
     if let Some(popup) = app.get_webview_window("alert-popup") {
         let _ = popup.hide();
     }
+    let _ = app.emit("interceptor://resolved", "");
 
     Ok(())
 }
@@ -337,6 +365,8 @@ async fn simulate_interception(
         host: "api.anthropic.com:443".to_string(),
         report,
         ttl_seconds: proxy::hold_queue::DEFAULT_HOLD_TTL_SECS,
+        scope: "provider".to_string(),
+        network_change: None,
     };
 
     if let Some(popup) = app.get_webview_window("alert-popup") {
@@ -403,7 +433,7 @@ pub fn run() {
             let handle_clone = app.handle().clone();
             let auditor_for_proxy = risk_auditor.clone();
             let state_for_proxy = app_state.clone();
-            tauri::async_runtime::block_on(async {
+            let (guard_for_watcher, pac_url) = tauri::async_runtime::block_on(async {
                 let proxy_mgr = proxy::ProxyManager::start(
                     auditor_for_proxy,
                     state_for_proxy,
@@ -411,7 +441,28 @@ pub fn run() {
                 )
                 .await
                 .expect("Failed to start proxy server");
+                let guard = proxy_mgr.guard.clone();
+                let pac_url = format!("http://{}/proxy.pac", proxy_mgr.server.bound_addr);
                 app.manage(proxy_mgr);
+                (guard, pac_url)
+            });
+            app.manage(guard_for_watcher.clone());
+
+            // Protection is ON by default: route AI domains through the local interceptor
+            match sysproxy::enable_sysproxy(&pac_url) {
+                Ok(status) => println!(
+                    "AI-AntiBan: защита включена ({} сетевых служб)",
+                    status.services_configured.len()
+                ),
+                Err(e) => eprintln!("AI-AntiBan: не удалось включить защиту при старте: {e}"),
+            }
+
+            // Network guard: detects sudden IP changes and freezes AI traffic until confirmed
+            guard_for_watcher.start(proxy::GuardCtx {
+                auditor: risk_auditor.clone(),
+                state: app_state.clone(),
+                hold_queue: app.state::<proxy::ProxyManager>().hold_queue.clone(),
+                app: app.handle().clone(),
             });
 
             // Native Russian tray menu with live actions
@@ -538,40 +589,29 @@ pub fn run() {
 
             let _tray = tray_builder.build(app)?;
 
-            // Background Network Watcher & Tray Status Updater
+            // Background tray status updater (network changes are handled by the NetworkGuard)
             let watcher_handle = app.handle().clone();
             let watcher_auditor = risk_auditor.clone();
             let watcher_state = app_state.clone();
+            let watcher_guard = guard_for_watcher;
             tauri::async_runtime::spawn(async move {
-                let mut last_ip = String::new();
                 loop {
                     if let Ok(report) = watcher_auditor
                         .evaluate_all(auditor::ProviderId::Anthropic, &watcher_state, false)
                         .await
                     {
-                        let current_ip = report.telemetry.ip.clone();
-                        let ip_changed = !last_ip.is_empty() && last_ip != current_ip;
-                        last_ip = current_ip.clone();
-
-                        // If network changed to a safe Green IP, automatically lift temporary provider blocks
-                        if ip_changed && report.overall_status == auditor::OverallStatus::Green {
-                            let _ = watcher_state.clear_blocked_providers().await;
-                            let _ = watcher_handle.emit("network://changed", &report);
-                        } else if ip_changed {
-                            let _ = watcher_handle.emit("network://changed", &report);
-                        }
-
                         let st = watcher_state.get_data().await;
                         let is_pinned = st
                             .pinned_ip
                             .as_ref()
-                            .map(|p| p.trim() == current_ip.trim())
+                            .map(|p| p.trim() == report.telemetry.ip.trim())
                             .unwrap_or(false);
-                        let has_blocked = !st.blocked_providers.is_empty();
+                        let has_blocked = !st.blocked_providers.is_empty()
+                            || watcher_guard.gate() != proxy::Gate::Open;
 
                         update_tray_from_report(&watcher_handle, &report, is_pinned, has_blocked);
                     }
-                    tokio::time::sleep(Duration::from_secs(15)).await;
+                    tokio::time::sleep(Duration::from_secs(10)).await;
                 }
             });
 

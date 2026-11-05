@@ -256,21 +256,41 @@ impl AppState {
     // --- IP History ---
 
     /// Appends a new IP history entry for the given provider, keeping at most 10 recent entries.
+    /// Repeated sightings of the same IP/country only refresh the timestamp of the last entry
+    /// (and are persisted at most once per minute) so busy sessions don't flood the disk.
     pub async fn record_ip_history(
         &self,
         provider: &str,
         entry: IpHistoryEntry,
     ) -> Result<(), StateError> {
+        let mut should_save = true;
         {
             let mut w = self.inner.write().await;
             let history = w.ip_history.entry(provider.to_string()).or_default();
-            history.push(entry);
-            if history.len() > MAX_HISTORY_ENTRIES_PER_PROVIDER {
-                let overflow = history.len() - MAX_HISTORY_ENTRIES_PER_PROVIDER;
-                history.drain(0..overflow);
+
+            let same_as_last = history
+                .last()
+                .map(|l| l.ip == entry.ip && l.country_code == entry.country_code)
+                .unwrap_or(false);
+
+            if same_as_last {
+                if let Some(last) = history.last_mut() {
+                    should_save = entry.timestamp.saturating_sub(last.timestamp) >= 60;
+                    last.timestamp = last.timestamp.max(entry.timestamp);
+                }
+            } else {
+                history.push(entry);
+                if history.len() > MAX_HISTORY_ENTRIES_PER_PROVIDER {
+                    let overflow = history.len() - MAX_HISTORY_ENTRIES_PER_PROVIDER;
+                    history.drain(0..overflow);
+                }
             }
         }
-        self.save_async().await
+        if should_save {
+            self.save_async().await
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn get_ip_history(&self, provider: &str) -> Vec<IpHistoryEntry> {

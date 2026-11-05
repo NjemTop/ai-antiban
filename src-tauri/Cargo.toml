@@ -1,6 +1,6 @@
 [package]
 name = "ai-antiban"
-version = "1.0.1"
+version = "1.0.2"
 description = "AI-AntiBan - Anti-Chain-Ban Risk Auditor"
 authors = ["AI-AntiBan Team"]
 edition = "2024"

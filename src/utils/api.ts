@@ -274,19 +274,29 @@ export async function cleanAppCache(provider: ProviderId): Promise<CleanResult> 
 export async function resolveInterception(
   id: string,
   action: InterceptionAction,
-  provider: string
+  provider: string,
+  scope?: string
 ): Promise<void> {
   if (isTauri()) {
-    await invoke("resolve_interception", { id, action, provider });
+    await invoke("resolve_interception", { id, action, provider, scope });
   } else {
     if (action === "AllowSession") {
-      if (!mockState.session_allowed_providers.includes(provider)) {
-        mockState.session_allowed_providers.push(provider);
+      if (scope === "network") {
+        mockState.session_allowed_providers = ["anthropic", "openai", "gemini"];
+        mockState.blocked_providers = [];
+      } else {
+        if (!mockState.session_allowed_providers.includes(provider)) {
+          mockState.session_allowed_providers.push(provider);
+        }
+        mockState.blocked_providers = mockState.blocked_providers.filter((p) => p !== provider);
       }
-      mockState.blocked_providers = mockState.blocked_providers.filter((p) => p !== provider);
-    } else if (action === "BlockUntilNetworkChange") {
-      if (!mockState.blocked_providers.includes(provider)) {
-        mockState.blocked_providers.push(provider);
+    } else if (action === "BlockUntilNetworkChange" || action === "OpenGuideAndBlock") {
+      if (scope === "network") {
+        mockState.blocked_providers = ["anthropic", "openai", "gemini"];
+      } else {
+        if (!mockState.blocked_providers.includes(provider)) {
+          mockState.blocked_providers.push(provider);
+        }
       }
     }
   }

@@ -60,7 +60,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   const [reports, setReports] = useState<Partial<Record<ProviderId, RiskReport>>>({});
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [scanLatencyMs, setScanLatencyMs] = useState<number>(42);
-  const [sysproxyActive, setSysproxyActive] = useState<boolean>(false);
+  const [sysproxyActive, setSysproxyActive] = useState<boolean>(true);
   const [copiedIp, setCopiedIp] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [interceptPayload, setInterceptPayload] = useState<RiskInterceptPayload | null>(null);
@@ -146,11 +146,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
       }).then((un) => unlisteners.push(un));
 
       listen("network://changed", () => {
-        runFullAudit(false);
+        runFullAudit(true);
       }).then((un) => unlisteners.push(un));
 
       listen<RiskInterceptPayload>("interceptor://risk-detected", (event) => {
         setInterceptPayload(event.payload);
+      }).then((un) => unlisteners.push(un));
+
+      listen("interceptor://resolved", () => {
+        setInterceptPayload(null);
+        runFullAudit(false);
       }).then((un) => unlisteners.push(un));
     }
 
@@ -388,7 +393,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                   AI-AntiBan
                 </h1>
                 <span className="text-[9px] px-1 py-0.2 rounded bg-zinc-900 border border-white/[0.07] text-zinc-400 font-mono tabular-nums">
-                  v1.0.1
+                  v1.0.2
                 </span>
               </div>
               <p className="text-[9.5px] text-zinc-500 leading-none mt-0.5">

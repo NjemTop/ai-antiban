@@ -24,6 +24,15 @@ pub enum InterceptionAction {
     OpenGuideAndBlock,
 }
 
+/// Describes a sudden egress-IP change detected by the network guard.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NetworkChange {
+    pub old_ip: Option<String>,
+    pub old_country: Option<String>,
+    pub new_ip: String,
+    pub new_country: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RiskInterceptPayload {
     pub id: String,
@@ -31,6 +40,15 @@ pub struct RiskInterceptPayload {
     pub host: String,
     pub report: RiskReport,
     pub ttl_seconds: u64,
+    /// `"provider"` — single held CONNECT; `"network"` — global pause after IP change.
+    #[serde(default = "default_scope")]
+    pub scope: String,
+    #[serde(default)]
+    pub network_change: Option<NetworkChange>,
+}
+
+fn default_scope() -> String {
+    "provider".to_string()
 }
 
 struct HoldEntry {

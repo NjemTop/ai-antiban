@@ -80,10 +80,19 @@ export type InterceptionAction =
   | "blockUntilNetworkChange"
   | "openGuideAndBlock";
 
+export interface NetworkChange {
+  old_ip?: string | null;
+  old_country?: string | null;
+  new_ip: string;
+  new_country: string;
+}
+
 export interface RiskInterceptPayload {
   id: string;
   provider: ProviderId;
   host: string;
   report: RiskReport;
   ttl_seconds: number;
+  scope?: "provider" | "network" | string;
+  network_change?: NetworkChange | null;
 }
