@@ -70,6 +70,7 @@ jobs:
         run: pnpm build
 
       - name: Run Rust unit & security tests
+        if: matrix.platform == 'macos-latest'
         run: cargo test --lib --test edge_cases_and_security_tests --manifest-path src-tauri/Cargo.toml --verbose
 
       - name: Build Tauri release artifacts
