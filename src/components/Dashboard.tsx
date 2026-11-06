@@ -418,7 +418,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                   Застава
                 </h1>
                 <span className="text-[9px] px-1 py-0.2 rounded bg-zinc-900 border border-white/[0.07] text-zinc-400 font-mono tabular-nums">
-                  v1.0.2
+                  v1.0.3
                 </span>
               </div>
               <p className="text-[9.5px] text-zinc-500 leading-none mt-0.5">

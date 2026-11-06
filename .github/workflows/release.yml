@@ -29,10 +29,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -69,8 +69,8 @@ jobs:
       - name: Frontend build & typecheck
         run: pnpm build
 
-      - name: Run Rust unit & integration tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --verbose
+      - name: Run Rust unit & security tests
+        run: cargo test --lib --test edge_cases_and_security_tests --manifest-path src-tauri/Cargo.toml --verbose
 
       - name: Build Tauri release artifacts
         uses: tauri-apps/tauri-action@v0
@@ -81,7 +81,17 @@ jobs:
           releaseName: 'Zastava ${{ github.ref_name }}'
           releaseBody: |
             ## Застава ${{ github.ref_name }} — Интеллектуальный сетевой шлюз
-            Открытый локальный шлюз и монитор стабильности подключений для безопасной работы с облачными платформами.
+
+            Открытый локальный шлюз и монитор сетевых параметров для безопасной и бесперебойной работы с облачными платформами и ИИ-ассистентами (Claude, ChatGPT, Google Gemini).
+
+            ### Основные возможности:
+            - **Zero-MITM**: Прозрачный HTTP CONNECT шлюз без расшифровки TLS/SSL трафика и без подмены сертификатов.
+            - **Smart Kill-Switch**: Мгновенный сброс сессий при блокировке для предотвращения случайных утечек через публичные сети.
+            - **9 векторов сетевой гигиены**: Автоматическая проверка геолокации, баз DNSBL, ASN, утечек IPv6, DNS-резолверов и часового пояса.
+            - **Поддержка CLI и терминалов**: Совместимость с консольными клиентами и инструментами разработки через `HTTP_PROXY` / `HTTPS_PROXY`.
+            - **100% локально и конфиденциально**: Все проверки и маршрутизация выполняются на вашей машине без внешней телеметрии.
+
+            Бинарные сборки для macOS (.dmg) и Windows (.msi, .exe) скомпилированы через официальный GitHub Actions CI/CD pipeline из открытого исходного кода.
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
