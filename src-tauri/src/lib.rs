@@ -212,6 +212,7 @@ async fn resolve_interception(
     state: tauri::State<'_, state::AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    let is_simulation = scope.as_deref() == Some("simulation") || id.starts_with("sim-");
     // `all` or scope "network" = network-wide hold created by the network guard after a sudden IP change
     let is_network_scope = scope.as_deref() == Some("network") || provider == proxy::ALL_PROVIDERS;
     let targets: Vec<String> = if is_network_scope {
@@ -222,54 +223,66 @@ async fn resolve_interception(
 
     match action {
         proxy::InterceptionAction::AllowSession => {
-            for p in &targets {
-                state
-                    .allow_provider_for_session(p)
-                    .await
-                    .map_err(|e| e.to_string())?;
+            if !is_simulation {
+                for p in &targets {
+                    state
+                        .allow_provider_for_session(p)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
             }
             proxy_manager
                 .hold_queue
                 .resolve(&id, proxy::HoldResolution::Allow)
                 .await;
-            for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
-                proxy_manager
-                    .hold_queue
-                    .resolve_all_for_provider(p, proxy::HoldResolution::Allow)
-                    .await;
-            }
-            if is_network_scope {
-                proxy_manager.guard.accept_current().await;
+            if !is_simulation {
+                for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
+                    proxy_manager
+                        .hold_queue
+                        .resolve_all_for_provider(p, proxy::HoldResolution::Allow)
+                        .await;
+                }
+                if is_network_scope {
+                    proxy_manager.guard.accept_current().await;
+                }
             }
         }
         proxy::InterceptionAction::BlockUntilNetworkChange => {
-            for p in &targets {
-                state.block_provider(p).await.map_err(|e| e.to_string())?;
+            if !is_simulation {
+                for p in &targets {
+                    state.block_provider(p).await.map_err(|e| e.to_string())?;
+                }
             }
             proxy_manager
                 .hold_queue
                 .resolve(&id, proxy::HoldResolution::Block)
                 .await;
-            for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
-                proxy_manager
-                    .hold_queue
-                    .resolve_all_for_provider(p, proxy::HoldResolution::Block)
-                    .await;
+            if !is_simulation {
+                for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
+                    proxy_manager
+                        .hold_queue
+                        .resolve_all_for_provider(p, proxy::HoldResolution::Block)
+                        .await;
+                }
             }
         }
         proxy::InterceptionAction::OpenGuideAndBlock => {
-            for p in &targets {
-                state.block_provider(p).await.map_err(|e| e.to_string())?;
+            if !is_simulation {
+                for p in &targets {
+                    state.block_provider(p).await.map_err(|e| e.to_string())?;
+                }
             }
             proxy_manager
                 .hold_queue
                 .resolve(&id, proxy::HoldResolution::Block)
                 .await;
-            for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
-                proxy_manager
-                    .hold_queue
-                    .resolve_all_for_provider(p, proxy::HoldResolution::Block)
-                    .await;
+            if !is_simulation {
+                for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
+                    proxy_manager
+                        .hold_queue
+                        .resolve_all_for_provider(p, proxy::HoldResolution::Block)
+                        .await;
+                }
             }
             if let Some(main_win) = app.get_webview_window("main") {
                 let _ = main_win.show();
@@ -355,7 +368,7 @@ async fn simulate_interception(
         checks,
     };
 
-    let hold_id = uuid::Uuid::new_v4().to_string();
+    let hold_id = format!("sim-{}", uuid::Uuid::new_v4());
     let _rx = proxy_manager
         .hold_queue
         .register(hold_id.clone(), provider_id.as_str())
@@ -364,10 +377,10 @@ async fn simulate_interception(
     let payload = proxy::RiskInterceptPayload {
         id: hold_id,
         provider: provider_id,
-        host: "api.anthropic.com:443".to_string(),
+        host: "ДЕМО-ТЕСТ: api.anthropic.com:443".to_string(),
         report,
         ttl_seconds: proxy::hold_queue::DEFAULT_HOLD_TTL_SECS,
-        scope: "provider".to_string(),
+        scope: "simulation".to_string(),
         network_change: None,
     };
 
@@ -388,11 +401,20 @@ async fn toggle_sysproxy(
     if enable {
         let pac_url = format!("http://{}/proxy.pac", proxy_manager.server.bound_addr);
         sysproxy::enable_sysproxy(&pac_url)?;
+        let _ = sysproxy::enable_cli_and_ide_protection(&pac_url);
         Ok(true)
     } else {
         sysproxy::disable_all_sysproxy();
         Ok(false)
     }
+}
+
+#[tauri::command]
+async fn enable_cli_protection(
+    proxy_manager: tauri::State<'_, proxy::ProxyManager>,
+) -> Result<sysproxy::CliProtectionReport, String> {
+    let addr = proxy_manager.server.bound_addr.to_string();
+    Ok(sysproxy::enable_cli_and_ide_protection(&addr))
 }
 
 #[tauri::command]
@@ -473,6 +495,11 @@ pub fn run() {
                 ),
                 Err(e) => eprintln!("Застава: не удалось включить защиту при старте: {e}"),
             }
+            let cli_report = sysproxy::enable_cli_and_ide_protection(&pac_url);
+            println!(
+                "Застава: защита CLI/IDE включена ({})",
+                cli_report.configured_targets.join(", ")
+            );
 
             // Network guard: detects sudden IP changes and freezes AI traffic until confirmed
             guard_for_watcher.start(proxy::GuardCtx {
@@ -681,6 +708,7 @@ pub fn run() {
             resolve_interception,
             simulate_interception,
             toggle_sysproxy,
+            enable_cli_protection,
             get_sysproxy_status,
             check_payment_bin,
             check_for_updates,

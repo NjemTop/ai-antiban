@@ -651,21 +651,20 @@ export const GuideViewer: React.FC<GuideViewerProps> = ({
             <div className="bg-[#12141A] rounded-lg border border-white/[0.07] p-2.5 space-y-1">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-sans font-bold text-zinc-100">
-                  Защита консольных ИИ-агентов (OpenCode, Claude Code, Antigravity)
+                  Защита VS Code, Cursor и CLI (Claude Code, OpenCode, Antigravity)
                 </span>
                 <span className="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 text-[9.5px] font-mono font-semibold">
-                  CLI & ДЕМОНЫ
+                  АВТО В 1 КЛИК
                 </span>
               </div>
               <p className="text-[11px] font-sans text-zinc-400 leading-relaxed">
-                Консольные утилиты не читают PAC-настройки браузеров. Чтобы защитить сессии терминальных агентов от утечки IP при смене VPN, направьте их через шлюз Zastava:
+                Застава автоматически прописывает шлюз <code className="text-zinc-200 font-mono">127.0.0.1:8899</code> в настройки <span className="text-zinc-200 font-medium">VS Code, Cursor, Claude Code</span> (<code className="text-zinc-200 font-mono">~/.claude/settings.json</code>) и в <code className="text-zinc-200 font-mono">~/.zshrc</code> с умной проверкой активности. При выходе из Заставы настройки очищаются сами:
               </p>
               <div className="p-1.5 bg-black/40 rounded border border-white/[0.05] font-mono text-[10px] text-zinc-300 select-all space-y-0.5">
-                <div>export HTTPS_PROXY=http://127.0.0.1:8899</div>
-                <div>opencode service set env HTTPS_PROXY http://127.0.0.1:8899</div>
+                <div>export HTTP_PROXY=&quot;http://127.0.0.1:8899&quot; HTTPS_PROXY=&quot;http://127.0.0.1:8899&quot;</div>
               </div>
               <p className="text-[10px] text-zinc-500">
-                Не-ИИ трафик (git, npm, brew) проходит через шлюз Zastava прозрачно и без задержек.
+                Не-ИИ трафик (git, npm, brew, расширения VS Code) проходит через шлюз Zastava прозрачно и без задержек.
               </p>
             </div>
           </div>

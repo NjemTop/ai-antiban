@@ -2,6 +2,7 @@ use crate::auditor::rules::ProviderMatrix;
 
 pub const DEFAULT_AI_DOMAINS: &[&str] = &[
     "claude.ai",
+    "claude.com",
     "anthropic.com",
     "claudeusercontent.com",
     "chatgpt.com",

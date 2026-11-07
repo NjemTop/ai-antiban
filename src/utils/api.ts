@@ -3,6 +3,7 @@ import {
   AppStateData,
   BinAuditResult,
   CleanResult,
+  CliProtectionReport,
   InstallUpdateResult,
   InterceptionAction,
   ProviderId,
@@ -282,6 +283,9 @@ export async function resolveInterception(
   if (isTauri()) {
     await invoke("resolve_interception", { id, action, provider, scope });
   } else {
+    if (scope === "simulation" || id.startsWith("sim-")) {
+      return;
+    }
     if (action === "AllowSession") {
       if (scope === "network") {
         mockState.session_allowed_providers = ["anthropic", "openai", "gemini"];
@@ -333,6 +337,19 @@ export async function toggleSysproxy(enable: boolean): Promise<boolean> {
   }
   mockSysproxyActive = enable;
   return mockSysproxyActive;
+}
+
+export async function enableCliProtection(): Promise<CliProtectionReport> {
+  if (isTauri()) {
+    return await invoke<CliProtectionReport>("enable_cli_protection");
+  }
+  return {
+    enabled: true,
+    proxy_url: "http://127.0.0.1:8899",
+    configured_targets: ["VS Code", "Claude Code", "Терминал (~/.zshrc)"],
+    shell_command:
+      'export HTTP_PROXY="http://127.0.0.1:8899" HTTPS_PROXY="http://127.0.0.1:8899" ALL_PROXY="http://127.0.0.1:8899"',
+  };
 }
 
 export async function getSysproxyStatus(): Promise<boolean> {

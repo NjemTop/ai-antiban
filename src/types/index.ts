@@ -123,3 +123,11 @@ export interface InstallUpdateResult {
   will_restart: boolean;
 }
 
+export interface CliProtectionReport {
+  enabled: boolean;
+  proxy_url: string;
+  configured_targets: string[];
+  shell_command: string;
+}
+
+

@@ -32,6 +32,7 @@ import {
   auditConnection,
   checkForUpdates,
   cleanAppCache,
+  enableCliProtection,
   fetchAppState,
   getMockScenario,
   getSysproxyStatus,
@@ -274,18 +275,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   };
 
   const handleCopyCliProxy = async () => {
-    const cmd = 'export HTTP_PROXY="http://127.0.0.1:8899" HTTPS_PROXY="http://127.0.0.1:8899" ALL_PROXY="http://127.0.0.1:8899"';
     try {
-      await navigator.clipboard.writeText(cmd);
+      const report = await enableCliProtection();
+      try {
+        await navigator.clipboard.writeText(report.shell_command);
+      } catch {
+        // clipboard optional if auto-configuration succeeded
+      }
       setCopiedCli(true);
+      const targets =
+        report.configured_targets.length > 0
+          ? report.configured_targets.join(", ")
+          : "Терминал и IDE";
       showToast(
-        "Команда CLI скопирована",
-        "Вставьте в терминал или в ~/.zshrc для защиты OpenCode, Antigravity, Claude Code",
+        "Защита VS Code, Cursor и CLI включена",
+        `Автоматически настроено: ${targets}. При выходе из Заставы прокси отключается сам.`,
         "success"
       );
-      setTimeout(() => setCopiedCli(false), 2500);
-    } catch {
-      showToast("Ошибка копирования", cmd, "error");
+      setTimeout(() => setCopiedCli(false), 3000);
+    } catch (err: any) {
+      showToast("Ошибка настройки CLI", err?.message || String(err), "error");
     }
   };
 
@@ -618,7 +627,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                       : "bg-zinc-900 hover:bg-zinc-800 border-white/[0.08] text-zinc-300"
                   }`}
                 >
-                  <span>v{updateInfo?.current_version || "1.0.4"}</span>
+                  <span>v{updateInfo?.current_version || "1.0.5"}</span>
                   <Download className={`w-2.5 h-2.5 ${checkingUpdate ? "animate-bounce text-emerald-400" : updateInfo?.update_available ? "text-amber-300" : "text-zinc-400"}`} />
                 </button>
               </div>
@@ -883,10 +892,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                   >
                     <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200 group-hover:text-sky-400 transition-colors">
                       <Terminal className="w-3.5 h-3.5 text-sky-400 shrink-0" strokeWidth={1.75} />
-                      <span className="truncate">{copiedCli ? "Скопировано!" : "Защита CLI"}</span>
+                      <span className="truncate">{copiedCli ? "Настроено!" : "Защита CLI"}</span>
                     </div>
                     <div className="text-[9.5px] text-zinc-500 mt-0.5 truncate leading-tight">
-                      OpenCode / Терминал
+                      VS Code / Cursor / CLI
                     </div>
                   </button>
 

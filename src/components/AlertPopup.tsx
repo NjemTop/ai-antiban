@@ -183,6 +183,7 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
 
   const { report, network_change, scope } = payload;
   const isNetworkChange = scope === "network" || !!network_change;
+  const isSimulation = scope === "simulation" || payload.id.startsWith("sim-");
 
   return (
     <div className="w-[480px] h-[440px] max-h-screen bg-[#0A0B0E] text-zinc-100 flex flex-col justify-between border border-white/[0.1] border-t-2 border-t-rose-500 rounded-xl p-4 select-none overflow-hidden shadow-2xl">
@@ -195,7 +196,9 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
               <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500" />
             </span>
             <span className="text-xs font-bold uppercase tracking-wider text-rose-400 font-sans">
-              {isNetworkChange
+              {isSimulation
+                ? "ДЕМО-ТЕСТ: СИМУЛЯЦИЯ ПЕРЕХВАТА"
+                : isNetworkChange
                 ? "ОБНАРУЖЕНА РЕЗКАЯ СМЕНА СЕТИ (IP)"
                 : "ПЕРЕХВАТ ОПАСНОГО ЗАПРОСА"}
             </span>
@@ -203,7 +206,11 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
 
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-mono text-zinc-400 tracking-wider">
-              {isNetworkChange ? "ТРАФИК НА ПАУЗЕ" : "ПАКЕТ НА ПАУЗЕ"}
+              {isSimulation
+                ? "УЧЕБНЫЙ ТЕСТ"
+                : isNetworkChange
+                ? "ТРАФИК НА ПАУЗЕ"
+                : "ПАКЕТ НА ПАУЗЕ"}
             </span>
             <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[10px] font-mono font-bold tabular-nums">
               <Clock className="w-3 h-3 text-rose-400" strokeWidth={1.75} />
@@ -236,7 +243,9 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
 
         {/* Advisory Subtitle */}
         <div className="mt-2 text-[11px] font-sans text-zinc-400 leading-snug">
-          {isNetworkChange
+          {isSimulation
+            ? "Учебная демонстрация (ваш реальный VPN не менялся). Пример того, как Застава замораживает соединение при опасном IP:"
+            : isNetworkChange
             ? "Обнаружена смена IP-адреса. Все активные сессии и запросы заморожены (как обрыв связи), чтобы защитить аккаунты от бана:"
             : "Соединение заморожено до отправки на сервер ИИ. Выявлены триггеры блокировки аккаунта:"}
         </div>
