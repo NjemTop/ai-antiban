@@ -134,6 +134,7 @@ impl Default for AppStateData {
 pub struct AppState {
     inner: Arc<RwLock<AppStateData>>,
     storage_path: Option<PathBuf>,
+    save_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -142,6 +143,7 @@ impl AppState {
         Self {
             inner: Arc::new(RwLock::new(data)),
             storage_path,
+            save_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -150,17 +152,20 @@ impl AppState {
         Self::new(AppStateData::default(), None)
     }
 
-    /// Loads state from `state.json` at `storage_path`. If file does not exist, uses default state.
+    /// Loads state from `state.json` at `storage_path`. If file does not exist or is corrupted,
+    /// self-heals by restoring default state and writing a clean file.
     pub fn load_or_default(storage_path: PathBuf) -> Self {
+        let mut was_corrupted = false;
         let mut data = if storage_path.exists() {
             match Self::load_from_file(&storage_path) {
                 Ok(loaded) => loaded,
                 Err(err) => {
                     eprintln!(
-                        "Warning: Failed to load state from {}: {}. Falling back to default state.",
+                        "Warning: Failed to load state from {}: {}. Self-healing to default state.",
                         storage_path.display(),
                         err
                     );
+                    was_corrupted = true;
                     AppStateData::default()
                 }
             }
@@ -170,6 +175,10 @@ impl AppState {
 
         // Session allowances are ephemeral per app launch and must not carry over across restarts
         data.session_allowed_providers.clear();
+
+        if was_corrupted {
+            let _ = Self::save_data_to_file(&data, &storage_path);
+        }
 
         Self::new(data, Some(storage_path))
     }
@@ -181,13 +190,19 @@ impl AppState {
         Ok(data)
     }
 
-    /// Saves `AppStateData` directly to a specified file path.
+    /// Saves `AppStateData` atomically to a specified file path (write temp + rename).
     pub fn save_data_to_file(data: &AppStateData, path: &Path) -> Result<(), StateError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let json = serde_json::to_string_pretty(data)?;
-        std::fs::write(path, json)?;
+        let tmp_path = path.with_extension(format!("json.tmp.{}", std::process::id()));
+        std::fs::write(&tmp_path, &json)?;
+        if let Err(e) = std::fs::rename(&tmp_path, path) {
+            let _ = std::fs::remove_file(&tmp_path);
+            // Fallback to direct write if cross-device or Windows file lock prevents rename
+            std::fs::write(path, json).map_err(|_| StateError::Io(e))?;
+        }
         Ok(())
     }
 
@@ -203,6 +218,7 @@ impl AppState {
     /// Asynchronously saves the current state to the configured storage path.
     pub async fn save_async(&self) -> Result<(), StateError> {
         if let Some(path) = &self.storage_path {
+            let _guard = self.save_lock.lock().await;
             let data = self.inner.read().await.clone();
             let path_clone = path.clone();
             tokio::task::spawn_blocking(move || Self::save_data_to_file(&data, &path_clone))

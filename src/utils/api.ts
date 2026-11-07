@@ -3,9 +3,11 @@ import {
   AppStateData,
   BinAuditResult,
   CleanResult,
+  InstallUpdateResult,
   InterceptionAction,
   ProviderId,
   RiskReport,
+  UpdateCheckResult,
 } from "../types";
 
 let mockState: AppStateData = {
@@ -413,3 +415,41 @@ export async function checkPaymentBin(
       "Европейская дебетовая карта Tier-1. Регион банка совпадает с локацией вашего сетевого шлюза (NL), максимальная совместимость с международным биллингом.",
   };
 }
+
+export async function checkForUpdates(): Promise<UpdateCheckResult> {
+  if (isTauri()) {
+    return await invoke<UpdateCheckResult>("check_for_updates");
+  }
+
+  return {
+    current_version: "1.0.4",
+    latest_version: "1.0.4",
+    update_available: false,
+    release_name: "Zastava v1.0.4",
+    release_notes: "Установлена актуальная версия приложения.",
+    release_url: "https://github.com/kingbest1195/ai-antiban/releases/latest",
+    published_at: new Date().toISOString(),
+    download_url: null,
+    asset_name: null,
+    asset_size: null,
+  };
+}
+
+export async function installUpdate(
+  downloadUrl: string,
+  assetName: string
+): Promise<InstallUpdateResult> {
+  if (isTauri()) {
+    return await invoke<InstallUpdateResult>("install_update", {
+      downloadUrl,
+      assetName,
+    });
+  }
+
+  return {
+    success: true,
+    message: "Обновление скачано и готово к установке.",
+    will_restart: false,
+  };
+}
+

@@ -39,62 +39,87 @@ interface VpsProvider {
   description: string;
 }
 
-const VPS_PROVIDERS: VpsProvider[] = [
+interface VirtualCardProvider {
+  id: string;
+  name: string;
+  badge: string;
+  tier: string;
+  url: string;
+  description: string;
+}
+
+const VIRTUAL_CARD_PROVIDERS: VirtualCardProvider[] = [
   {
-    id: "timeweb",
-    name: "Timeweb Cloud",
-    tier: "Рекомендуемый облачный провайдер РФ/ЕС",
-    badge: "ТОП ВЫБОР",
-    price: "от ~250 ₽/мес",
-    locations: ["NL", "DE", "FI", "PL"],
-    payments: ["Карты РФ", "СБП", "T-Pay"],
-    specs: "1 vCPU · 1 ГБ RAM · 100 Мбит/с",
-    promoCode: "ZASTAVA",
-    url: "https://timeweb.cloud/?utm_source=zastava",
+    id: "platipomiru",
+    name: "Плати по миру",
+    badge: "КАРТА №1 · СБП",
+    tier: "Виртуальные карты Visa / Mastercard с пополнением в рублях",
+    url: "https://platipomiru.com/?code=UXCAF1Z9",
     description:
-      "Мгновенный запуск Ubuntu 22.04 в Амстердаме или Франкфурте. Идеально для AmneziaWG и XRay Reality.",
+      "Быстрый выпуск зарубежных карт для оплаты подписок Claude Pro, ChatGPT Plus, Cursor и зарубежных VPS через СБП.",
   },
+  {
+    id: "wanttopay",
+    name: "WantToPay",
+    badge: "TELEGRAM-БОТ №2",
+    tier: "Выпуск карт в Telegram за 2 минуты (3D Secure)",
+    url: "https://telegram.me/WantToPayBot?start=w17851188--ERIEX",
+    description:
+      "Удобный бот для выпуска виртуальных карт US / EU / HK с поддержкой 3D Secure. Проверяйте BIN во вкладке «Биллинг».",
+  },
+  {
+    id: "epn",
+    name: "e.pn",
+    badge: "STRIPE PRO №3",
+    tier: "Трастовые банковские BIN США и Европы с AVS",
+    url: "https://e.pn?a=nomadnocode",
+    description:
+      "Десятки проверенных банковских BIN США и ЕС с поддержкой проверки адреса (AVS) и максимальной проходимостью в Stripe.",
+  },
+];
+
+const VPS_PROVIDERS: VpsProvider[] = [
   {
     id: "hostvds",
     name: "HostVDS",
-    tier: "Ультра-бюджетный зарубежный VPS",
-    badge: "ОТ $0.99",
+    tier: "Зарубежный VPS №1 для выходного узла (NL / US / FI)",
+    badge: "ОТ $0.99/МЕС",
     price: "от ~$0.99 / мес",
     locations: ["NL", "US", "FI", "FR"],
-    payments: ["Карты РФ", "СБП", "Crypto"],
-    specs: "1 vCPU · 1 ГБ RAM · NVMe",
-    promoCode: "ZASTAVA",
-    url: "https://hostvds.com/?utm_source=zastava",
+    payments: ["Карты", "СБП", "Crypto"],
+    specs: "1 vCPU · 1 ГБ RAM · NVMe · IPv4 + /64 IPv6",
+    promoCode: "HOSTVDS",
+    url: "https://hostvds.com/?affiliate_uuid=3d2b6c0c-5d99-4065-9d37-a941a46e9282",
     description:
-      "Самый доступный выделенный статический IPv4 в Европе и США. Чистые подсети без ограничений.",
+      "Самый доступный выделенный статический IPv4 и чистая /64 подсеть IPv6 в Амстердаме, Хельсинки и США. Идеален как зарубежный узел.",
   },
   {
-    id: "aeza",
-    name: "Aeza",
-    tier: "Высокоскоростные серверы с Anti-DDoS",
-    badge: "NVMe 1 Гбит/с",
-    price: "от ~€1.50 / мес",
-    locations: ["NL", "DE", "FI", "AT", "SE"],
-    payments: ["Карты РФ", "СБП", "Crypto"],
-    specs: "Ryzen 9 · NVMe · 1 Гбит/с",
-    promoCode: "ZASTAVA",
-    url: "https://aeza.net/?utm_source=zastava",
+    id: "ishosting",
+    name: "is*hosting",
+    tier: "Премиальные выделенные VPS в 35+ странах мира",
+    badge: "ЧИСТЫЙ ASN",
+    price: "от ~$5.00 / мес",
+    locations: ["NL", "DE", "US", "FI", "UK"],
+    payments: ["Карты РФ", "СБП", "Crypto", "Cards"],
+    specs: "1 vCPU · 2 ГБ RAM · NVMe · IPv4 + IPv6",
+    promoCode: "ISHOSTING",
+    url: "https://ishosting.com/affiliate/ODA5NyM4",
     description:
-      "Сверхбыстрый канал без лимитов трафика. Отличный пинг для комфортной работы в Cursor и Claude.",
+      "Безупречная репутация IP в базах Spamhaus и антифроде Anthropic/OpenAI. Поддержка Ubuntu 24.04 и выделенных подсетей IPv6.",
   },
   {
-    id: "serveroid",
-    name: "Serveroid",
-    tier: "Выделенные IP для разработчиков",
-    badge: "ЧИСТЫЙ IP",
-    price: "от ~190 ₽/мес",
-    locations: ["NL", "US", "DE"],
-    payments: ["Карты РФ", "СБП"],
-    specs: "KVM · 1 IPv4 · Безлимит",
-    promoCode: "ZASTAVA",
-    url: "https://serveroid.com/?utm_source=zastava",
+    id: "timeweb",
+    name: "Timeweb Cloud",
+    tier: "Облачный провайдер РФ + ЕС (идеален для входного узла Каскада)",
+    badge: "КАСКАД РФ → ЕС",
+    price: "от ~180 ₽/мес",
+    locations: ["RU", "NL", "DE", "KZ"],
+    payments: ["Карты РФ", "СБП", "T-Pay"],
+    specs: "1 vCPU · 1 ГБ RAM · Dual-Stack IPv4/IPv6",
+    promoCode: "TIMEWEB",
+    url: "https://timeweb.cloud/?i=138893",
     description:
-      "Европейские дата-центры без соседей по IP и с надежной репутацией в базах Spamhaus / DNSBL.",
+      "Лучший выбор для транзитного российского VPS (Москва / СПб) при сборке каскадного VPN (РФ → Зарубежье), а также узлов в Амстердаме и Франкфурте.",
   },
 ];
 
@@ -105,7 +130,24 @@ export const GuideViewer: React.FC<GuideViewerProps> = ({
   onToast,
 }) => {
   const [activeTab, setActiveTab] = useState<string>(initialGuide);
+  const [vpnMethod, setVpnMethod] = useState<"cascade" | "cdn" | "ipv6">("cascade");
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+
+  const copyCommand = (id: string, cmd: string, label: string) => {
+    navigator.clipboard.writeText(cmd);
+    setCopiedCode(id);
+    if (onToast) {
+      onToast("Команда скопирована", label, "success");
+    }
+    setTimeout(() => setCopiedCode(null), 2500);
+  };
+
+  const handleOpenCard = (card: VirtualCardProvider) => {
+    openExternal(card.url);
+    if (onToast) {
+      onToast("Переход к сервису карт", `Открываем ${card.name} в браузере`, "info");
+    }
+  };
 
   const copyPromo = (provider: VpsProvider) => {
     navigator.clipboard.writeText(provider.promoCode);
@@ -279,23 +321,161 @@ export const GuideViewer: React.FC<GuideViewerProps> = ({
             </div>
           </div>
 
-          {/* Step 2: AmneziaVPN Setup Instructions */}
-          <div className="bg-[#12141A] rounded-lg border border-white/[0.07] p-2.5 space-y-1.5">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-100 font-sans">
-              <Terminal className="w-3.5 h-3.5 text-emerald-400" strokeWidth={1.75} />
-              <span>Шаг 2. Установка AmneziaVPN в 2 клика (без консоли)</span>
+          {/* Step 2: 3 Proven VPN Architectures (Cascade Xray / Russian CDN XHTTP / IPv6 Revival) */}
+          <div className="bg-[#12141A] rounded-lg border border-white/[0.07] p-2.5 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-100 font-sans">
+                <Terminal className="w-3.5 h-3.5 text-emerald-400" strokeWidth={1.75} />
+                <span>Шаг 2. Настройка непробиваемого Xray (3 метода)</span>
+              </div>
+              <span className="text-[9.5px] font-mono text-zinc-500">Ubuntu 22.04 / 24.04</span>
             </div>
-            <ol className="text-[10.5px] font-sans text-zinc-300 space-y-1 list-decimal list-inside leading-snug">
-              <li>
-                Скачайте бесплатный клиент <span className="text-emerald-400 font-medium">AmneziaVPN</span> и выберите «Настроить свой сервер».
-              </li>
-              <li>
-                Вставьте полученный IP сервера, логин <code className="text-zinc-200 bg-zinc-900 px-1 py-0.2 rounded font-mono text-[10px]">root</code> и пароль.
-              </li>
-              <li>
-                Выберите протокол <span className="text-zinc-100 font-medium">AmneziaWG</span> или <span className="text-zinc-100 font-medium">XRay Reality</span> и нажмите «Подключиться».
-              </li>
-            </ol>
+
+            {/* Method Selector */}
+            <div className="grid grid-cols-3 gap-1 p-0.5 bg-zinc-950/70 rounded border border-white/[0.06] text-[10px]">
+              <button
+                type="button"
+                onClick={() => setVpnMethod("cascade")}
+                className={`py-1 px-1.5 rounded font-medium transition-all cursor-pointer ${
+                  vpnMethod === "cascade"
+                    ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-300"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                1. Каскад / Xray
+              </button>
+              <button
+                type="button"
+                onClick={() => setVpnMethod("cdn")}
+                className={`py-1 px-1.5 rounded font-medium transition-all cursor-pointer ${
+                  vpnMethod === "cdn"
+                    ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-300"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                2. CDN + XHTTP
+              </button>
+              <button
+                type="button"
+                onClick={() => setVpnMethod("ipv6")}
+                className={`py-1 px-1.5 rounded font-medium transition-all cursor-pointer ${
+                  vpnMethod === "ipv6"
+                    ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-300"
+                    : "text-zinc-400 hover:text-zinc-200"
+                }`}
+              >
+                3. IPv6 + 3x-ui
+              </button>
+            </div>
+
+            {vpnMethod === "cascade" && (
+              <div className="space-y-1.5 text-[10.5px] text-zinc-300 leading-snug">
+                <p className="text-zinc-400">
+                  <strong className="text-zinc-100">Голое ядро Xray + Каскад (РФ → Зарубежье):</strong> быстрая установка без тяжелых панелей. Можно использовать 1 зарубежный VPS или связать входной VPS в РФ (Timeweb) с выходным VPS в Европе/США (HostVDS / is*hosting).
+                </p>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-[10px] text-zinc-400">
+                    <span>1. Установка VLESS + Reality на сервер (или XHTTP):</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        copyCommand(
+                          "cmd-xray-core",
+                          "wget -qO- https://raw.githubusercontent.com/ServerTechnologies/simple-xray-core/refs/heads/main/xray-install | bash",
+                          "Автоустановка голого ядра Xray VLESS Reality"
+                        )
+                      }
+                      className="text-emerald-400 hover:text-emerald-300 font-mono flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedCode === "cmd-xray-core" ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      <span>Копировать</span>
+                    </button>
+                  </div>
+                  <div className="p-1.5 bg-black/50 rounded border border-white/[0.06] font-mono text-[9.5px] text-zinc-200 select-all break-all">
+                    wget -qO- https://raw.githubusercontent.com/ServerTechnologies/simple-xray-core/refs/heads/main/xray-install | bash
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-[10px] text-zinc-400">
+                    <span>2. На входном VPS в РФ — скрипт связки в каскад:</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        copyCommand(
+                          "cmd-xray-cascade",
+                          "wget -qO- https://raw.githubusercontent.com/ServerTechnologies/cascade-for-x-ray/refs/heads/main/cascad | bash",
+                          "Скрипт настройки каскадного моста Xray"
+                        )
+                      }
+                      className="text-emerald-400 hover:text-emerald-300 font-mono flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedCode === "cmd-xray-cascade" ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      <span>Копировать</span>
+                    </button>
+                  </div>
+                  <div className="p-1.5 bg-black/50 rounded border border-white/[0.06] font-mono text-[9.5px] text-zinc-200 select-all break-all">
+                    wget -qO- https://raw.githubusercontent.com/ServerTechnologies/cascade-for-x-ray/refs/heads/main/cascad | bash
+                  </div>
+                </div>
+                <div className="text-[10px] text-zinc-400">
+                  Команды управления ключами в терминале: <code className="text-emerald-300 font-mono">mainuser</code>, <code className="text-emerald-300 font-mono">newuser</code>, <code className="text-emerald-300 font-mono">userlist</code>, <code className="text-emerald-300 font-mono">sharelink</code>, <code className="text-emerald-300 font-mono">rmuser</code>.
+                </div>
+              </div>
+            )}
+
+            {vpnMethod === "cdn" && (
+              <div className="space-y-1.5 text-[10.5px] text-zinc-300 leading-snug">
+                <p className="text-zinc-400">
+                  <strong className="text-zinc-100">VLESS + XHTTP через российский CDN:</strong> обход жестких блокировок и «белых списков» мобильных операторов через Yandex Cloud CDN / EdgeCenter.
+                </p>
+                <ol className="list-decimal list-inside space-y-1 text-[10px] text-zinc-300">
+                  <li>
+                    Направьте поддомен <code className="text-zinc-100 font-mono">origin.domain.ru</code> на ваш зарубежный VPS, установите Nginx + TLS сертификат Let&apos;s Encrypt и проксируйте <code className="text-zinc-100 font-mono">/api/stream</code> на локальный порт Xray (<code className="text-zinc-100 font-mono">127.0.0.1:8080</code>).
+                  </li>
+                  <li>
+                    Чтобы российский CDN не блокировал <code className="text-zinc-100 font-mono">POST</code>-запросы, в настройках <code className="text-zinc-100 font-mono">xhttpSettings</code> включите передачу данных методом <code className="text-emerald-300 font-mono">GET</code> в заголовках:
+                  </li>
+                </ol>
+                <div className="p-1.5 bg-black/50 rounded border border-white/[0.06] font-mono text-[9.5px] text-zinc-200 select-all space-y-0.5">
+                  <div>&quot;mode&quot;: &quot;packet-up&quot;, &quot;uplinkHTTPMethod&quot;: &quot;GET&quot;,</div>
+                  <div>&quot;uplinkDataPlacement&quot;: &quot;header&quot;, &quot;uplinkDataKey&quot;: &quot;x-edge-data&quot;, &quot;enableXmux&quot;: true</div>
+                </div>
+              </div>
+            )}
+
+            {vpnMethod === "ipv6" && (
+              <div className="space-y-1.5 text-[10.5px] text-zinc-300 leading-snug">
+                <p className="text-zinc-400">
+                  <strong className="text-zinc-100">Оживление заблокированных серверов через IPv6:</strong> ТСПУ блокирует IPv4-адреса, но почти не трогает подсети <code className="text-zinc-100 font-mono">IPv6 (/64)</code>.
+                </p>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-[10px] text-zinc-400">
+                    <span>Установка панели 3x-ui с поддержкой IPv6 и XHTTP:</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        copyCommand(
+                          "cmd-3xui",
+                          "bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)",
+                          "Установка панели 3x-ui"
+                        )
+                      }
+                      className="text-emerald-400 hover:text-emerald-300 font-mono flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedCode === "cmd-3xui" ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      <span>Копировать</span>
+                    </button>
+                  </div>
+                  <div className="p-1.5 bg-black/50 rounded border border-white/[0.06] font-mono text-[9.5px] text-zinc-200 select-all break-all">
+                    bash &lt;(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+                  </div>
+                </div>
+                <p className="text-[10px] text-zinc-400">
+                  В Inbound укажите <code className="text-zinc-200 font-mono">Listen: [::]</code> и подключайтесь к <code className="text-emerald-300 font-mono">[IPv6_СЕРВЕРА]:443</code> напрямую либо через Dual-Stack каскад из РФ (Timeweb IPv4 → Зарубежный IPv6).
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Step 3: Pin Reference IP */}
@@ -326,11 +506,50 @@ export const GuideViewer: React.FC<GuideViewerProps> = ({
           <div className="bg-[#12141A] rounded-lg border border-amber-500/25 p-2.5 space-y-1">
             <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-400 font-sans">
               <CreditCard className="w-3.5 h-3.5 shrink-0" strokeWidth={1.75} />
-              <span>Платежная гигиена: как не получить бан в Stripe</span>
+              <span>Платежная гигиена: зарубежные карты для Claude, ChatGPT и VPS</span>
             </div>
             <p className="text-[11px] text-zinc-300 font-sans leading-relaxed">
-              Более 40% блокировок в Claude Pro и ChatGPT Plus происходят при привязке виртуальной карты из серого пула или рассинхроне страны банка и VPN.
+              Для оплаты зарубежных подписок в Stripe и хостингов используйте проверенные сервисы выпуска виртуальных карт и проверяйте первые 6 цифр (BIN) во вкладке «Биллинг».
             </p>
+          </div>
+
+          {/* Partner Virtual Card Services */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between px-0.5">
+              <span className="text-[10px] font-sans tracking-wider uppercase text-zinc-400 font-semibold">
+                Проверенные сервисы зарубежных виртуальных карт
+              </span>
+              <span className="text-[10px] font-mono text-zinc-500">Visa / Mastercard · 3DS</span>
+            </div>
+
+            {VIRTUAL_CARD_PROVIDERS.map((card) => (
+              <div
+                key={card.id}
+                className="bg-[#12141A] rounded-lg border border-white/[0.07] p-2.5 space-y-1.5 hover:border-white/[0.14] transition-all"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <CreditCard className="w-3.5 h-3.5 text-amber-400 shrink-0" strokeWidth={1.75} />
+                      <span className="text-xs font-bold text-white font-sans">{card.name}</span>
+                      <span className="px-1.5 py-0.2 rounded bg-amber-500/10 border border-amber-500/20 text-[9px] font-mono text-amber-300 font-semibold">
+                        {card.badge}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-zinc-400 font-sans mt-0.5">{card.tier}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenCard(card)}
+                    className="py-1 px-2.5 rounded bg-zinc-100 text-zinc-950 hover:bg-white text-[10.5px] font-semibold font-sans flex items-center gap-1 shrink-0 transition-colors cursor-pointer"
+                  >
+                    <span>Оформить</span>
+                    <ExternalLink className="w-3 h-3" strokeWidth={1.75} />
+                  </button>
+                </div>
+                <p className="text-[10.5px] text-zinc-400 font-sans leading-snug">{card.description}</p>
+              </div>
+            ))}
           </div>
 
           <div className="space-y-1.5">

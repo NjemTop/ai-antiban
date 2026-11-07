@@ -26,6 +26,44 @@ pub fn register_clean_exit_guard() {
     });
 }
 
+/// Spawns an asynchronous OS signal watcher (`SIGINT` / `SIGTERM` / `SIGHUP`) that guarantees
+/// systemic PAC proxy settings are disabled before the process terminates.
+pub fn spawn_signal_cleanup_watcher() {
+    tauri::async_runtime::spawn(async {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate()).ok();
+            let mut sighup = signal(SignalKind::hangup()).ok();
+
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {},
+                _ = async {
+                    match &mut sigterm {
+                        Some(s) => { let _ = s.recv().await; }
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {},
+                _ = async {
+                    match &mut sighup {
+                        Some(s) => { let _ = s.recv().await; }
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {},
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+
+        eprintln!("Termination signal received! Cleaning up system PAC proxy...");
+        disable_all_sysproxy();
+        std::process::exit(0);
+    });
+}
+
 /// Disables systemic PAC proxy on all network services across macOS and Windows.
 pub fn disable_all_sysproxy() {
     #[cfg(target_os = "macos")]
@@ -157,7 +195,8 @@ pub fn is_sysproxy_active() -> bool {
 }
 
 /// Re-applies the PAC configuration when a new network service appeared (e.g. a VPN client
-/// added its own service), otherwise that service would bypass the interceptor.
+/// added its own service) or when an external network tool / OS sleep-wake cycle disabled
+/// or overwrote the PAC URL on the primary interface (Self-Healing).
 /// Returns `true` when the configuration was re-applied.
 pub fn refresh_if_services_changed() -> bool {
     if !is_sysproxy_active() {
@@ -173,6 +212,50 @@ pub fn refresh_if_services_changed() -> bool {
             known.sort();
             if services != known {
                 return enable_sysproxy(&pac).is_ok();
+            }
+
+            // Also verify that the primary service (e.g. "Wi-Fi" or first active service)
+            // still has Auto Proxy enabled and pointing to our PAC URL.
+            let check_target = services
+                .iter()
+                .find(|s| s.eq_ignore_ascii_case("Wi-Fi") || s.contains("Ethernet"))
+                .or_else(|| services.first());
+            if let Some(service) = check_target {
+                if let Ok(output) = std::process::Command::new("networksetup")
+                    .args(["-getautoproxyurl", service])
+                    .output()
+                {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let url_matches = stdout.contains(&pac);
+                    let enabled_yes = stdout.lines().any(|l| {
+                        let t = l.trim().to_ascii_lowercase();
+                        t.starts_with("enabled:") && t.contains("yes")
+                    });
+                    if !url_matches || !enabled_yes {
+                        return enable_sysproxy(&pac).is_ok();
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let pac = LAST_PAC_URL.lock().ok().and_then(|g| g.clone());
+        if let Some(pac) = pac {
+            if let Ok(output) = std::process::Command::new("reg")
+                .args([
+                    "query",
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
+                    "/v",
+                    "AutoConfigURL",
+                ])
+                .output()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if !output.status.success() || !stdout.contains(&pac) {
+                    return enable_sysproxy(&pac).is_ok();
+                }
             }
         }
     }

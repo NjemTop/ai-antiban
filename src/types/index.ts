@@ -96,3 +96,30 @@ export interface RiskInterceptPayload {
   scope?: "provider" | "network" | string;
   network_change?: NetworkChange | null;
 }
+
+export interface UpdateCheckResult {
+  current_version: string;
+  latest_version: string;
+  update_available: boolean;
+  release_name: string;
+  release_notes: string;
+  release_url: string;
+  published_at?: string | null;
+  download_url?: string | null;
+  asset_name?: string | null;
+  asset_size?: number | null;
+}
+
+export interface UpdateProgressPayload {
+  downloaded_bytes: number;
+  total_bytes: number;
+  percent: number;
+  phase: string;
+}
+
+export interface InstallUpdateResult {
+  success: boolean;
+  message: string;
+  will_restart: boolean;
+}
+

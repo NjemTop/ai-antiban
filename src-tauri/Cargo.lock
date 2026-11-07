@@ -5042,7 +5042,7 @@ dependencies = [
 
 [[package]]
 name = "zastava"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "iana-time-zone",

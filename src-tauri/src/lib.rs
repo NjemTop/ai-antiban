@@ -3,6 +3,7 @@ pub mod bin_checker;
 pub mod proxy;
 pub mod state;
 pub mod sysproxy;
+pub mod updater;
 
 use std::time::Duration;
 use tauri::{
@@ -408,13 +409,28 @@ async fn check_payment_bin(
     checker.check_bin(&bin, vpn_country.as_deref()).await
 }
 
+#[tauri::command]
+async fn check_for_updates() -> Result<updater::UpdateCheckResult, String> {
+    updater::check_github_updates().await
+}
+
+#[tauri::command]
+async fn install_update(
+    download_url: String,
+    asset_name: String,
+    app: tauri::AppHandle,
+) -> Result<updater::InstallUpdateResult, String> {
+    updater::download_and_install_update(&app, &download_url, &asset_name).await
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            // Register panic guard for systemic proxy clean-up
+            // Register panic guard and OS termination signal watcher for systemic proxy clean-up
             sysproxy::register_clean_exit_guard();
+            sysproxy::spawn_signal_cleanup_watcher();
 
             // Initialize persistent AppState
             let app_state = state::init_app_state(app.handle())
@@ -510,6 +526,13 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
+            let update_i = MenuItem::with_id(
+                app,
+                "check_updates",
+                "🔄 Проверить обновления (GitHub)",
+                true,
+                None::<&str>,
+            )?;
             let sep2 = PredefinedMenuItem::separator(app)?;
             let quit_i = MenuItem::with_id(
                 app,
@@ -529,6 +552,7 @@ pub fn run() {
                     &pin_i,
                     &guide_i,
                     &support_i,
+                    &update_i,
                     &sep2,
                     &quit_i,
                 ],
@@ -573,6 +597,13 @@ pub fn run() {
                     }
                     "support" => {
                         let _ = app.opener().open_url("https://t.me/nomadnocode", None::<&str>);
+                    }
+                    "check_updates" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                        let _ = app.emit("tray://check-updates", ());
                     }
                     _ => {}
                 })
@@ -651,7 +682,9 @@ pub fn run() {
             simulate_interception,
             toggle_sysproxy,
             get_sysproxy_status,
-            check_payment_bin
+            check_payment_bin,
+            check_for_updates,
+            install_update
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

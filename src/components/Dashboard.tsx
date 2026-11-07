@@ -15,20 +15,27 @@ import {
   ChevronRight,
   Send,
   Terminal,
+  Download,
+  ExternalLink,
+  X,
 } from "lucide-react";
 import {
   AppStateData,
   ProviderId,
   RiskInterceptPayload,
   RiskReport,
+  UpdateCheckResult,
+  UpdateProgressPayload,
 } from "../types";
 import {
   allowProviderSession,
   auditConnection,
+  checkForUpdates,
   cleanAppCache,
   fetchAppState,
   getMockScenario,
   getSysproxyStatus,
+  installUpdate,
   MockScenario,
   pinCurrentIp,
   setMockScenario,
@@ -45,7 +52,7 @@ import { DeepAuditTab } from "./DeepAuditTab";
 import { GuideViewer } from "./GuideViewer";
 import { BinCheckerTab } from "./BinCheckerTab";
 import { ToastContainer, ToastMessage } from "./Toast";
-import { openTelegramSupport } from "../utils/opener";
+import { openExternal, openTelegramSupport } from "../utils/opener";
 
 type ActiveTab = "pulse" | "audit" | "guide" | "bin";
 
@@ -69,6 +76,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [interceptPayload, setInterceptPayload] = useState<RiskInterceptPayload | null>(null);
   const [initialGuideTarget, setInitialGuideTarget] = useState<string>("01-personal-vpn-15min");
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState<boolean>(false);
+  const [installingUpdate, setInstallingUpdate] = useState<boolean>(false);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgressPayload | null>(null);
+  const [showUpdateModal, setShowUpdateModal] = useState<boolean>(false);
   const [scenario, setScenario] = useState<MockScenario>(() => {
     const s = new URLSearchParams(window.location.search).get("scenario") as MockScenario | null;
     if (s === "clean" || s === "turkey" || s === "ru") {
@@ -127,8 +139,72 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
     }
   };
 
+  const handleCheckUpdates = async (silent: boolean = false) => {
+    setCheckingUpdate(true);
+    try {
+      const info = await checkForUpdates();
+      setUpdateInfo(info);
+      if (info.update_available) {
+        setShowUpdateModal(true);
+        showToast(
+          `Доступно обновление v${info.latest_version}`,
+          info.release_name || "Нажмите «Обновить» для автоматической установки",
+          "info"
+        );
+      } else if (!silent) {
+        setShowUpdateModal(true);
+        showToast(
+          "Обновлений нет",
+          `У вас установлена актуальная версия v${info.current_version}`,
+          "success"
+        );
+      }
+    } catch (err: any) {
+      if (!silent) {
+        showToast("Ошибка проверки обновлений", err?.message || String(err), "error");
+      }
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    if (!updateInfo?.download_url || !updateInfo?.asset_name) {
+      if (updateInfo?.release_url) {
+        await openExternal(updateInfo.release_url);
+      }
+      return;
+    }
+
+    setInstallingUpdate(true);
+    setUpdateProgress({
+      downloaded_bytes: 0,
+      total_bytes: updateInfo.asset_size || 0,
+      percent: 0,
+      phase: "starting",
+    });
+
+    try {
+      const res = await installUpdate(updateInfo.download_url, updateInfo.asset_name);
+      showToast(
+        res.will_restart ? "Обновление установлено" : "Обновление готово",
+        res.message,
+        "success"
+      );
+      if (!res.will_restart) {
+        setShowUpdateModal(false);
+      }
+    } catch (err: any) {
+      showToast("Ошибка установки обновления", err?.message || String(err), "error");
+    } finally {
+      setInstallingUpdate(false);
+      setUpdateProgress(null);
+    }
+  };
+
   useEffect(() => {
     runFullAudit(false);
+    handleCheckUpdates(true);
 
     const unlisteners: Array<() => void> = [];
     if (isTauri()) {
@@ -139,6 +215,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
 
       listen("tray://rescan", () => {
         runFullAudit(true);
+      }).then((un) => unlisteners.push(un));
+
+      listen("tray://check-updates", () => {
+        handleCheckUpdates(false);
+      }).then((un) => unlisteners.push(un));
+
+      listen<UpdateProgressPayload>("updater://progress", (event) => {
+        setUpdateProgress(event.payload);
       }).then((un) => unlisteners.push(un));
 
       listen("tray://pin-current-ip", async () => {
@@ -343,8 +427,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
     ? "bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)]"
     : "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]";
 
-  const ipv6Leak = activeReport?.ipv6_result?.status === "red";
-  const tzMismatch = activeReport?.timezone_result?.status && activeReport.timezone_result.status !== "green";
+  const ipv6Leak =
+    activeReport?.ipv6_result?.status === "critical" ||
+    activeReport?.ipv6_result?.status === "red" ||
+    activeReport?.ipv6_result?.status === "warning";
+  const tzMismatch =
+    activeReport?.timezone_result?.status === "warning" ||
+    activeReport?.timezone_result?.status === "critical" ||
+    activeReport?.timezone_result?.status === "yellow" ||
+    activeReport?.timezone_result?.status === "red";
 
   const handleOpenSupport = async () => {
     showToast("Связь / Поддержка", "Переход в Telegram: @nomadnocode", "info");
@@ -354,6 +445,105 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   return (
     <div className="w-[380px] min-h-[560px] max-w-[380px] bg-[#0A0B0E] text-zinc-100 flex flex-col justify-between p-3 select-none font-sans border border-white/[0.08] rounded-xl shadow-2xl relative">
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
+
+      {/* GitHub Update Check & Auto-Updater Modal */}
+      {showUpdateModal && updateInfo && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="update-dialog-title"
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 animate-in fade-in duration-150"
+        >
+          <div className="w-full max-w-[348px] bg-[#12141A] border border-white/[0.12] rounded-xl p-3.5 shadow-2xl space-y-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center border ${
+                    updateInfo.update_available
+                      ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400"
+                      : "bg-zinc-900 border-white/[0.08] text-zinc-300"
+                  }`}
+                >
+                  <Download className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 id="update-dialog-title" className="text-xs font-bold text-white">
+                    {updateInfo.update_available
+                      ? `Доступно обновление v${updateInfo.latest_version}`
+                      : "Установлена актуальная версия"}
+                  </h2>
+                  <p className="text-[10px] font-mono text-zinc-400">
+                    Текущая: v{updateInfo.current_version} · Релиз на GitHub: v{updateInfo.latest_version}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={installingUpdate}
+                onClick={() => setShowUpdateModal(false)}
+                className="p-1 rounded-md text-zinc-400 hover:text-white hover:bg-white/[0.06] cursor-pointer"
+                title="Закрыть"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="bg-black/40 border border-white/[0.06] rounded-lg p-2 max-h-[140px] overflow-y-auto text-[10.5px] text-zinc-300 whitespace-pre-wrap leading-relaxed font-sans">
+              {updateInfo.release_notes || updateInfo.release_name || "Описание релиза отсутствует."}
+            </div>
+
+            {installingUpdate && updateProgress && (
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-[10px] font-mono text-emerald-300">
+                  <span>
+                    {updateProgress.phase === "installing"
+                      ? "Установка обновления и перезапуск..."
+                      : "Скачивание релиза с GitHub..."}
+                  </span>
+                  <span>{updateProgress.percent}%</span>
+                </div>
+                <div className="w-full h-1.5 bg-zinc-900 rounded-full overflow-hidden border border-white/[0.06]">
+                  <div
+                    className="h-full bg-emerald-400 transition-all duration-150"
+                    style={{ width: `${Math.max(5, updateProgress.percent)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => openExternal(updateInfo.release_url)}
+                className="px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-[10.5px] text-zinc-300 flex items-center gap-1 cursor-pointer"
+              >
+                <span>GitHub Release</span>
+                <ExternalLink className="w-3 h-3" />
+              </button>
+
+              {updateInfo.update_available ? (
+                <button
+                  type="button"
+                  disabled={installingUpdate}
+                  onClick={handleInstallUpdate}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-zinc-950 font-bold text-[11px] flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>{installingUpdate ? "Обновление..." : "Обновить автоматически"}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowUpdateModal(false)}
+                  className="px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-[11px] cursor-pointer"
+                >
+                  Понятно
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* In-window Emergency Interception Overlay (guarantees user always sees hold prompt) */}
       {interceptPayload && (
@@ -417,9 +607,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                 <h1 className="text-xs font-bold tracking-tight text-white">
                   Застава
                 </h1>
-                <span className="text-[9px] px-1 py-0.2 rounded bg-zinc-900 border border-white/[0.07] text-zinc-400 font-mono tabular-nums">
-                  v1.0.3
-                </span>
+                <button
+                  type="button"
+                  disabled={checkingUpdate}
+                  onClick={() => handleCheckUpdates(false)}
+                  title="Проверить обновления из GitHub Releases"
+                  className={`text-[9px] px-1.5 py-0.2 rounded border font-mono tabular-nums flex items-center gap-1 cursor-pointer transition-colors ${
+                    updateInfo?.update_available
+                      ? "bg-amber-500/15 border-amber-500/40 text-amber-300 font-semibold"
+                      : "bg-zinc-900 hover:bg-zinc-800 border-white/[0.08] text-zinc-300"
+                  }`}
+                >
+                  <span>v{updateInfo?.current_version || "1.0.4"}</span>
+                  <Download className={`w-2.5 h-2.5 ${checkingUpdate ? "animate-bounce text-emerald-400" : updateInfo?.update_available ? "text-amber-300" : "text-zinc-400"}`} />
+                </button>
               </div>
               <p className="text-[9.5px] text-zinc-500 leading-none mt-0.5">
                 Сетевой шлюз · Zero-MITM
@@ -773,15 +974,31 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
           <CheckCircle2 className="w-3 h-3 text-emerald-500/80" />
           <span>100% локально · Zero-MITM</span>
         </span>
-        <button
-          type="button"
-          onClick={handleOpenSupport}
-          className="flex items-center gap-1 text-sky-400/90 hover:text-sky-300 transition-colors font-medium cursor-pointer hover:underline"
-          title="Связь и поддержка в Telegram: @nomadnocode (t.me / telegram.me)"
-        >
-          <Send className="w-2.5 h-2.5 text-sky-400" />
-          <span>Связь @nomadnocode</span>
-        </button>
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            disabled={checkingUpdate}
+            onClick={() => handleCheckUpdates(false)}
+            className={`flex items-center gap-1 transition-colors font-medium cursor-pointer hover:underline ${
+              updateInfo?.update_available
+                ? "text-amber-300 font-semibold"
+                : "text-zinc-400 hover:text-zinc-200"
+            }`}
+            title="Проверить обновления из релизов на GitHub"
+          >
+            <Download className="w-2.5 h-2.5" />
+            <span>{checkingUpdate ? "Проверка..." : updateInfo?.update_available ? `Обновить (v${updateInfo.latest_version})` : "Обновления"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleOpenSupport}
+            className="flex items-center gap-1 text-sky-400/90 hover:text-sky-300 transition-colors font-medium cursor-pointer hover:underline"
+            title="Связь и поддержка в Telegram: @nomadnocode (t.me / telegram.me)"
+          >
+            <Send className="w-2.5 h-2.5 text-sky-400" />
+            <span>@nomadnocode</span>
+          </button>
+        </div>
       </footer>
     </div>
   );

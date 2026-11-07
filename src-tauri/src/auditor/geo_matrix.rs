@@ -40,19 +40,32 @@ impl ProviderId {
     }
 
     /// Determines target AI provider from HTTP CONNECT or request hostname.
+    /// Normalizes bracketed hosts and strips trailing DNS dots to prevent FQDN bypasses.
     pub fn from_host(raw_host: &str) -> Option<Self> {
-        let host = raw_host
-            .split(':')
-            .next()
-            .unwrap_or(raw_host)
+        let without_port = if let Some(bracketed) = raw_host.strip_prefix('[') {
+            bracketed.split(']').next().unwrap_or(raw_host)
+        } else {
+            raw_host.split(':').next().unwrap_or(raw_host)
+        };
+
+        let host = without_port
             .trim()
+            .trim_matches(|c| c == '[' || c == ']')
+            .trim_end_matches('.')
             .to_lowercase();
+
+        if host.is_empty() {
+            return None;
+        }
 
         // 1. Anthropic / Claude
         if host == "claude.ai"
             || host.ends_with(".claude.ai")
+            || host == "claude.com"
+            || host.ends_with(".claude.com")
             || host == "anthropic.com"
             || host.ends_with(".anthropic.com")
+            || host == "claudeusercontent.com"
             || host.ends_with(".claudeusercontent.com")
         {
             return Some(ProviderId::Anthropic);
@@ -63,7 +76,9 @@ impl ProviderId {
             || host.ends_with(".chatgpt.com")
             || host == "openai.com"
             || host.ends_with(".openai.com")
+            || host == "oaistatic.com"
             || host.ends_with(".oaistatic.com")
+            || host == "oaiusercontent.com"
             || host.ends_with(".oaiusercontent.com")
         {
             return Some(ProviderId::Openai);
@@ -71,11 +86,17 @@ impl ProviderId {
 
         // 3. Google Gemini / AI Studio / Vertex AI / Cloud AI Companion (Antigravity, Orca)
         if host == "gemini.google.com"
+            || host.ends_with(".gemini.google.com")
             || host == "aistudio.google.com"
+            || host.ends_with(".aistudio.google.com")
             || host == "makersuite.google.com"
+            || host.ends_with(".makersuite.google.com")
             || host == "generativelanguage.googleapis.com"
+            || host.ends_with(".generativelanguage.googleapis.com")
             || host == "aiplatform.googleapis.com"
+            || host.ends_with(".aiplatform.googleapis.com")
             || host == "cloudaicompanion.googleapis.com"
+            || host.ends_with(".cloudaicompanion.googleapis.com")
             || host.ends_with(".clients6.google.com")
         {
             return Some(ProviderId::Gemini);

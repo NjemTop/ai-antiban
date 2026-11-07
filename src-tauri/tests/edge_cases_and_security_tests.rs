@@ -3,8 +3,10 @@ use zastava_lib::auditor::geo_matrix::{evaluate_provider_geo, CheckStatus, Provi
 use zastava_lib::auditor::history::{evaluate_impossible_travel, evaluate_ip_pinning};
 use zastava_lib::auditor::leaks::{is_russian_or_belarusian_timezone, RUSSIAN_TIMEZONES};
 use zastava_lib::auditor::rules::{DangerousAsns, ProviderMatrix};
+use std::net::IpAddr;
 use zastava_lib::bin_checker::BinChecker;
-use zastava_lib::state::IpHistoryEntry;
+use zastava_lib::proxy::server::{is_forbidden_ip, parse_host_port, validate_tunnel_target};
+use zastava_lib::state::{AppState, AppStateData, IpHistoryEntry};
 
 #[test]
 fn test_edge_case_turkey_gemini_special_rules() {
@@ -125,3 +127,97 @@ fn test_edge_case_vps_pinning_and_russian_telecom() {
     assert_eq!(res_strict_mismatch.status, CheckStatus::Critical);
     assert_eq!(res_strict_mismatch.code, "PINNED_IP_MISMATCH");
 }
+
+#[test]
+fn test_security_fqdn_trailing_dot_bypass_prevention() {
+    // Trailing dot FQDN must still match AI providers so CONNECT cannot bypass the proxy guard
+    assert_eq!(
+        ProviderId::from_host("api.anthropic.com.:443"),
+        Some(ProviderId::Anthropic)
+    );
+    assert_eq!(
+        ProviderId::from_host("claude.ai."),
+        Some(ProviderId::Anthropic)
+    );
+    assert_eq!(
+        ProviderId::from_host("chatgpt.com.:443"),
+        Some(ProviderId::Openai)
+    );
+    assert_eq!(
+        ProviderId::from_host("generativelanguage.googleapis.com..:443"),
+        Some(ProviderId::Gemini)
+    );
+}
+
+#[test]
+fn test_security_ssrf_and_proxy_loop_prevention() {
+    let proxy_port = 8899;
+
+    // Allowed standard HTTPS external host
+    assert!(validate_tunnel_target("example.com", 443, proxy_port).is_ok());
+    assert!(validate_tunnel_target("example.com", 8443, proxy_port).is_ok());
+
+    // Disallowed non-HTTP/HTTPS ports (e.g., SSH, Redis, PostgreSQL, proxy loop)
+    assert!(validate_tunnel_target("example.com", 22, proxy_port).is_err());
+    assert!(validate_tunnel_target("example.com", 6379, proxy_port).is_err());
+    assert!(validate_tunnel_target("example.com", 8899, proxy_port).is_err());
+    assert!(validate_tunnel_target("example.com", 8900, proxy_port).is_err());
+
+    // Disallowed localhost / internal hostnames
+    assert!(validate_tunnel_target("localhost", 443, proxy_port).is_err());
+    assert!(validate_tunnel_target("internal.localhost", 443, proxy_port).is_err());
+    assert!(validate_tunnel_target("printer.local", 443, proxy_port).is_err());
+
+    // Disallowed literal private/loopback/metadata IPs
+    assert!(validate_tunnel_target("127.0.0.1", 443, proxy_port).is_err());
+    assert!(validate_tunnel_target("10.0.0.1", 443, proxy_port).is_err());
+    assert!(validate_tunnel_target("192.168.1.1", 443, proxy_port).is_err());
+    assert!(validate_tunnel_target("172.16.0.1", 443, proxy_port).is_err());
+    assert!(validate_tunnel_target("169.254.169.254", 80, proxy_port).is_err());
+    assert!(validate_tunnel_target("100.64.0.1", 443, proxy_port).is_err());
+    assert!(validate_tunnel_target("::1", 443, proxy_port).is_err());
+    assert!(validate_tunnel_target("fe80::1", 443, proxy_port).is_err());
+    assert!(validate_tunnel_target("fd00::1", 443, proxy_port).is_err());
+
+    // Verify is_forbidden_ip directly
+    assert!(is_forbidden_ip(&"127.0.0.1".parse::<IpAddr>().unwrap()));
+    assert!(is_forbidden_ip(&"169.254.169.254".parse::<IpAddr>().unwrap()));
+    assert!(!is_forbidden_ip(&"1.1.1.1".parse::<IpAddr>().unwrap()));
+    assert!(!is_forbidden_ip(&"2606:4700:4700::1111".parse::<IpAddr>().unwrap()));
+}
+
+#[test]
+fn test_security_parse_host_port_ipv6_and_fqdn() {
+    assert_eq!(
+        parse_host_port("api.anthropic.com.:443"),
+        ("api.anthropic.com".to_string(), 443)
+    );
+    assert_eq!(
+        parse_host_port("[2606:4700:4700::1111]:443"),
+        ("2606:4700:4700::1111".to_string(), 443)
+    );
+    assert_eq!(
+        parse_host_port("[::1]:8899"),
+        ("::1".to_string(), 8899)
+    );
+}
+
+#[test]
+fn test_self_healing_corrupt_state_file() {
+    let temp_dir = std::env::temp_dir().join(format!("zastava_test_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let state_file = temp_dir.join("state.json");
+
+    // Write corrupted JSON
+    std::fs::write(&state_file, "{corrupt_json: true, ").expect("write corrupt state");
+
+    // load_or_default must self-heal and overwrite with valid default JSON
+    let _recovered = AppState::load_or_default(state_file.clone());
+
+    let healed_contents = std::fs::read_to_string(&state_file).expect("read healed state");
+    let parsed: AppStateData = serde_json::from_str(&healed_contents).expect("valid healed json");
+    assert_eq!(parsed, AppStateData::default());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+

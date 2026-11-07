@@ -48,6 +48,9 @@ pub struct GuardCtx {
 struct Baseline {
     ip: String,
     country: Option<String>,
+    /// True only if the baseline was either user-confirmed or verified non-sanctioned.
+    /// Prevents a VPN drop back to an initial sanctioned IP (e.g. RU at boot) from auto-opening the gate.
+    trusted: bool,
 }
 
 struct Pending {
@@ -86,11 +89,21 @@ fn severity(report: &RiskReport) -> u8 {
 }
 
 async fn audit_all(ctx: &GuardCtx) -> Result<Vec<RiskReport>, String> {
-    // First call forces a fresh geo lookup, the others reuse the freshly filled cache.
-    let anthropic = ctx
+    // First call forces a fresh geo lookup (with 1 automatic retry for transient VPN interface handshakes),
+    // and the others reuse the freshly filled cache.
+    let anthropic = match ctx
         .auditor
         .evaluate_all(ProviderId::Anthropic, &ctx.state, true)
-        .await?;
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            ctx.auditor
+                .evaluate_all(ProviderId::Anthropic, &ctx.state, true)
+                .await?
+        }
+    };
     let (openai, gemini) = tokio::join!(
         ctx.auditor
             .evaluate_all(ProviderId::Openai, &ctx.state, false),
@@ -251,7 +264,11 @@ impl NetworkGuard {
         };
         inner.observed_ip = Some(ip.clone());
 
-        let Some(baseline_ip) = inner.baseline.as_ref().map(|b| b.ip.clone()) else {
+        let Some((baseline_ip, baseline_trusted)) = inner
+            .baseline
+            .as_ref()
+            .map(|b| (b.ip.clone(), b.trusted))
+        else {
             let country = ctx
                 .auditor
                 .resolver
@@ -259,17 +276,34 @@ impl NetworkGuard {
                 .await
                 .ok()
                 .map(|t| t.country_code);
-            inner.baseline = Some(Baseline { ip, country });
+            let is_sanctioned = if let Some(ref cc) = country {
+                let matrix = ctx.auditor.rules.provider_matrix.read().await;
+                matrix
+                    .global_blocked_countries
+                    .iter()
+                    .any(|b| b.eq_ignore_ascii_case(cc))
+            } else {
+                false
+            };
+            inner.baseline = Some(Baseline {
+                ip,
+                country,
+                trusted: !is_sanctioned,
+            });
             return;
         };
 
         if ip == baseline_ip {
-            if self.gate() != Gate::Open {
-                self.restore_locked(ctx, &mut inner).await;
-            } else {
-                inner.handled_ip = None;
+            if baseline_trusted {
+                if self.gate() != Gate::Open {
+                    self.restore_locked(ctx, &mut inner).await;
+                } else {
+                    inner.handled_ip = None;
+                }
+                return;
             }
-            return;
+            // If the initial baseline was untrusted (e.g. app started on a sanctioned IP before VPN)
+            // and the user switched away and dropped back to it, treat it as an unsafe change!
         }
 
         if inner.handled_ip.as_deref() == Some(ip.as_str()) {
@@ -414,6 +448,7 @@ impl NetworkGuard {
         inner.baseline = Some(Baseline {
             ip: ip.to_string(),
             country: Some(tel.country_code.clone()),
+            trusted: true,
         });
         inner.handled_ip = None;
         if let Some(p) = inner.pending.take() {
@@ -438,6 +473,7 @@ impl NetworkGuard {
             ctx.hold_queue.remove(&p.id).await;
         }
         inner.handled_ip = None;
+        ctx.auditor.resolver.invalidate_cache().await;
         let _ = ctx.state.clear_blocked_providers().await;
         self.set_gate(Gate::Open);
         self.hide_popup(ctx);
