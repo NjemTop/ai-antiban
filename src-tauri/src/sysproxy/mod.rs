@@ -958,7 +958,7 @@ pub fn enable_cli_and_ide_protection_with_tz(
     proxy_addr_or_url: &str,
     tz: Option<&str>,
 ) -> CliProtectionReport {
-    let (proxy_url, port) = normalize_proxy_url_and_port(proxy_addr_or_url);
+    let (proxy_url, _port) = normalize_proxy_url_and_port(proxy_addr_or_url);
     let mut configured_targets = Vec::new();
 
     #[cfg(target_os = "macos")]
@@ -1014,7 +1014,7 @@ pub fn enable_cli_and_ide_protection_with_tz(
                 let rc_path = home.join(rc_name);
                 if rc_name == ".zshenv" || rc_name == ".zshrc" || rc_path.exists() {
                     let existing = fs::read_to_string(&rc_path).unwrap_or_default();
-                    let updated = upsert_shell_rc_content_with_tz(&existing, &proxy_url, port, tz);
+                    let updated = upsert_shell_rc_content_with_tz(&existing, &proxy_url, _port, tz);
                     if fs::write(&rc_path, updated).is_ok() {
                         shell_configured = true;
                     }

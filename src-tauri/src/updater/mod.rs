@@ -505,7 +505,7 @@ fn apply_platform_update(
         },
     );
 
-    let target_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("Zastava.exe"));
+    let target_exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("Zastava.exe"));
     let bat_path = update_dir.join("zastava_autoupdate.bat");
 
     if safe_name.ends_with(".msi") {

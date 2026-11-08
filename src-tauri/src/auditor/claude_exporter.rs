@@ -91,6 +91,14 @@ pub fn get_claude_desktop_config_path(home: &Path) -> Option<PathBuf> {
                 return Some(p);
             }
         }
+        let fallback = home
+            .join("AppData")
+            .join("Roaming")
+            .join("Claude")
+            .join("claude_desktop_config.json");
+        if fallback.exists() {
+            return Some(fallback);
+        }
     }
     None
 }
