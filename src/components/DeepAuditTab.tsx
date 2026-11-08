@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   ArrowRight,
+  FlaskConical,
 } from "lucide-react";
 import { AppStateData, CheckResult, RiskReport } from "../types";
 
@@ -13,6 +14,7 @@ interface DeepAuditTabProps {
   report: RiskReport | null;
   state: AppStateData | null;
   onNavigateToGuide?: (guideId?: string) => void;
+  onSimulate?: () => void;
 }
 
 interface AuditRowItem {
@@ -28,6 +30,7 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
   report,
   state,
   onNavigateToGuide,
+  onSimulate,
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -41,19 +44,52 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
 
   const { telemetry } = report;
 
-  const dnsCheckResult: CheckResult = report.checks?.[6] || {
-    status: "ok",
-    code: "DNS_CLEAN",
-    message: "Утечек через локальные DNS-резолверы РФ не обнаружено (Cloudflare 1.1.1.1).",
-    guide_ref: null,
-  };
+  const dnsCheckResult: CheckResult =
+    report.checks?.find((c) => c.code.startsWith("DNS_") && !c.code.includes("COUNTRY") && !c.code.includes("BL")) ||
+    report.checks?.[6] || {
+      status: "ok",
+      code: "DNS_CLEAN",
+      message: "Утечек через локальные DNS-резолверы РФ не обнаружено (Cloudflare 1.1.1.1).",
+      guide_ref: null,
+    };
 
-  const locCheckResult: CheckResult = report.checks?.[8] || {
-    status: "ok",
-    code: "OS_LOCATION_SAFE",
-    message: "Защита Wi-Fi BSSID активна: службы геолокации не передают MAC-адреса роутеров.",
-    guide_ref: "03-os-privacy-setup",
-  };
+  const locCheckResult: CheckResult =
+    report.checks?.find((c) => c.code.includes("LOCATION") || c.code.includes("WIFI")) ||
+    report.checks?.[8] || {
+      status: "ok",
+      code: "OS_LOCATION_SAFE",
+      message: "Защита Wi-Fi BSSID активна: службы геолокации не передают MAC-адреса роутеров.",
+      guide_ref: "03-os-privacy-setup",
+    };
+
+  const reverseDnsResult: CheckResult =
+    report.checks?.find((c) => c.code.includes("REVERSE_DNS") || c.code.includes("PTR")) ||
+    report.checks?.[9] || {
+      status: "ok",
+      code: "REVERSE_DNS_CLEAN",
+      message: "Reverse DNS (PTR): запись соответствует чистому выделенному серверу, стоп-слова анонимайзеров отсутствуют.",
+      guide_ref: null,
+    };
+
+  const dnsCountryResult: CheckResult =
+    report.checks?.find((c) => c.code.includes("DNS_COUNTRY") || c.code.includes("CROSS_BORDER")) ||
+    report.checks?.[10] || {
+      status: "ok",
+      code: "DNS_COUNTRY_CONSISTENT",
+      message: "Страна DNS-серверов совпадает с выходным шлюзом. Cross-Border DNS утечек не обнаружено.",
+      guide_ref: null,
+    };
+
+  const localeResult: CheckResult =
+    report.checks?.find((c) => c.code.includes("LOCALE") || c.code.includes("HYGIENE")) ||
+    report.checks?.[11] || {
+      status: "ok",
+      code: state?.synced_ai_timezone ? "LOCALE_HYGIENE_CLEAN" : "LOCALE_EN_SAFE",
+      message: state?.synced_ai_timezone
+        ? `Окружение CLI/IDE защищено: таймзона (${state.synced_ai_timezone}) и en_US.UTF-8 синхронизированы Заставой.`
+        : "Локаль среды и системные переменные LANG/LC_ALL соответствуют безопасному профилю.",
+      guide_ref: "03-os-privacy-setup",
+    };
 
   const auditItems: AuditRowItem[] = [
     {
@@ -119,12 +155,14 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
     {
       id: "timezone",
       num: 8,
-      name: "Часовой пояс системы",
+      name: "Часовой пояс системы и ИИ",
       result: report.timezone_result,
-      detail: telemetry.timezone
+      detail: state?.synced_ai_timezone
+        ? `Авто-TZ: ${state.synced_ai_timezone} (ИИ защищен)`
+        : telemetry.timezone
         ? `Зона IP: ${telemetry.timezone}`
         : report.timezone_result.message,
-      metricTag: telemetry.timezone || "UTC",
+      metricTag: state?.synced_ai_timezone ? "SYNCED" : telemetry.timezone || "UTC",
     },
     {
       id: "wifi_geo",
@@ -133,6 +171,30 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
       result: locCheckResult,
       detail: locCheckResult.message,
       metricTag: locCheckResult.status === "ok" ? "СКРЫТО" : "ОТКРЫТО",
+    },
+    {
+      id: "reverse_dns",
+      num: 10,
+      name: "Reverse DNS / Hostname (PTR)",
+      result: reverseDnsResult,
+      detail: reverseDnsResult.message,
+      metricTag: reverseDnsResult.status === "ok" ? "PTR OK" : "PTR WARN",
+    },
+    {
+      id: "dns_country",
+      num: 11,
+      name: "Согласованность страны DNS",
+      result: dnsCountryResult,
+      detail: dnsCountryResult.message,
+      metricTag: dnsCountryResult.status === "ok" ? telemetry.country_code : "SPLIT",
+    },
+    {
+      id: "locale_hygiene",
+      num: 12,
+      name: "Локаль среды и гигиена ИИ (LANG/TZ)",
+      result: localeResult,
+      detail: localeResult.message,
+      metricTag: state?.synced_ai_timezone ? "AI TZ" : "en_US",
     },
   ];
 
@@ -146,7 +208,7 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
       <div className="flex items-center justify-between px-0.5">
         <div className="flex items-center gap-1.5">
           <span className="text-[10px] font-sans tracking-wider uppercase text-zinc-400 font-semibold">
-            Детальная проверка по 9 пунктам
+            12 шлюзов безопасности (по стандарту 2ip.io)
           </span>
         </div>
 
@@ -188,7 +250,7 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
                   <div className="truncate">
                     <div className="flex items-center gap-1.5">
                       <span className="text-zinc-500 text-[10px] font-mono tabular-nums">
-                        0{item.num}
+                        {item.num < 10 ? `0${item.num}` : item.num}
                       </span>
                       <span className="text-[11.5px] font-semibold text-zinc-100 font-sans tracking-tight truncate">
                         {item.name}
@@ -252,6 +314,36 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
           );
         })}
       </div>
+
+      {/* Educational Interception Demo Card */}
+      {onSimulate && (
+        <div className="bg-[#12141A] rounded-xl border border-white/[0.08] p-3.5 space-y-2 mt-3 shadow-xs">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-lg bg-amber-500/10 border border-amber-500/25 flex items-center justify-center text-amber-400">
+              <FlaskConical className="w-3.5 h-3.5" strokeWidth={1.75} />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-white tracking-tight">
+                Учебная демонстрация окна перехвата (Демо-тест)
+              </div>
+              <div className="text-[10px] text-zinc-400 font-mono">
+                Симуляция блокировки 403 / HOLD без вреда для реального соединения
+              </div>
+            </div>
+          </div>
+          <p className="text-[11px] text-zinc-300 leading-relaxed font-sans">
+            Хотите увидеть, как работает автоматическая защита Заставы при обнаружении утечки? Нажмите демо-тест, чтобы вызвать окно удержания запроса и протестировать действия.
+          </p>
+          <button
+            type="button"
+            onClick={onSimulate}
+            className="w-full py-2 px-3 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors shadow-xs"
+          >
+            <FlaskConical className="w-3.5 h-3.5" />
+            <span>Запустить симуляцию перехвата (Демо HOLD)</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 };

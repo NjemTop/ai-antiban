@@ -4,35 +4,23 @@ use crate::auditor::geo_matrix::{CheckResult, GUIDE_OS_PRIVACY};
 pub const IPV6_CHECK_URL: &str = "https://[2606:4700:4700::1111]/cdn-cgi/trace";
 pub const IPV6_CHECK_TIMEOUT_MS: u64 = 800;
 
-pub const RUSSIAN_TIMEZONES: &[&str] = &[
-    "Europe/Moscow",
-    "Europe/Kaliningrad",
-    "Europe/Kirov",
-    "Europe/Samara",
-    "Europe/Saratov",
-    "Europe/Ulyanovsk",
-    "Europe/Volgograd",
-    "Europe/Astrakhan",
-    "Europe/Minsk",
-    "Asia/Yekaterinburg",
-    "Asia/Omsk",
-    "Asia/Novosibirsk",
-    "Asia/Barnaul",
-    "Asia/Tomsk",
-    "Asia/Novokuznetsk",
-    "Asia/Krasnoyarsk",
-    "Asia/Irkutsk",
-    "Asia/Chita",
-    "Asia/Yakutsk",
-    "Asia/Khandyga",
-    "Asia/Vladivostok",
-    "Asia/Ust-Nera",
-    "Asia/Magadan",
-    "Asia/Sakhalin",
-    "Asia/Srednekolymsk",
-    "Asia/Kamchatka",
-    "Asia/Anadyr",
-];
+pub use crate::auditor::os_env::{
+    check_os_location_services, evaluate_locale_env_hygiene, is_russian_or_belarusian_timezone,
+    RUSSIAN_TIMEZONES,
+};
+
+/// Evaluates whether system timezone exposes user's actual location (backward compatible wrapper).
+pub fn evaluate_system_timezone(ip_timezone: Option<&str>) -> CheckResult {
+    crate::auditor::os_env::evaluate_system_timezone(ip_timezone, None)
+}
+
+/// Evaluates whether system timezone exposes user's actual location with AI agent synced timezone check.
+pub fn evaluate_system_timezone_with_synced(
+    ip_timezone: Option<&str>,
+    synced_ai_tz: Option<&str>,
+) -> CheckResult {
+    crate::auditor::os_env::evaluate_system_timezone(ip_timezone, synced_ai_tz)
+}
 
 /// Checks for dual-stack IPv6 leaks by pinging Cloudflare IPv6-only CDN trace endpoint.
 pub async fn check_ipv6_leak(ipv4_country: &str, global_blocked: &[String]) -> CheckResult {
@@ -98,52 +86,6 @@ pub async fn check_ipv6_leak(ipv4_country: &str, global_blocked: &[String]) -> C
     }
 }
 
-/// Evaluates whether system timezone exposes user's actual location.
-pub fn evaluate_system_timezone(ip_timezone: Option<&str>) -> CheckResult {
-    let system_tz = match iana_time_zone::get_timezone() {
-        Ok(tz) => tz,
-        Err(_) => {
-            return CheckResult::ok(
-                "TIMEZONE_UNKNOWN",
-                "Системный часовой пояс не определен.",
-            );
-        }
-    };
-
-    // 1. Check if system timezone is in Russia or Belarus
-    if is_russian_or_belarusian_timezone(&system_tz) {
-        return CheckResult::warning(
-            "TIMEZONE_LEAK_RU",
-            format!(
-                "Системный часовой пояс ОС ({system_tz}) указывает на РФ/РБ. Браузеры и десктопный Claude видят эту зону даже через VPN.",
-            ),
-            Some(GUIDE_OS_PRIVACY.to_string()),
-        );
-    }
-
-    // 2. Compare against IP timezone if available
-    if let Some(target_tz) = ip_timezone {
-        if !target_tz.is_empty() && system_tz != target_tz {
-            return CheckResult::warning(
-                "TIMEZONE_MISMATCH",
-                format!(
-                    "Часовой пояс ОС ({system_tz}) отличается от таймзоны IP ({target_tz}). Для максимального траста рекомендуется синхронизировать пояс с локацией сервера.",
-                ),
-                Some(GUIDE_OS_PRIVACY.to_string()),
-            );
-        }
-    }
-
-    CheckResult::ok(
-        "TIMEZONE_MATCH",
-        format!("Системный часовой пояс ({system_tz}) совпадает с локацией IP."),
-    )
-}
-
-pub fn is_russian_or_belarusian_timezone(tz: &str) -> bool {
-    RUSSIAN_TIMEZONES.iter().any(|&item| item.eq_ignore_ascii_case(tz))
-}
-
 /// Checks OS DNS resolvers for Russian domestic ISP leaks (`scutil --dns` on macOS, `ipconfig /all` on Windows).
 pub fn check_dns_leak(ipv4_country: &str, russian_keywords: &[String]) -> CheckResult {
     #[cfg(target_os = "macos")]
@@ -189,45 +131,6 @@ pub fn check_dns_leak(ipv4_country: &str, russian_keywords: &[String]) -> CheckR
         "DNS_CLEAN",
         "Утечек через локальные DNS-резолверы РФ не обнаружено.",
     )
-}
-
-/// Checks OS Location Services status (BSSID Wi-Fi triangulation).
-pub fn check_os_location_services() -> CheckResult {
-    #[cfg(target_os = "windows")]
-    {
-        if let Ok(output) = std::process::Command::new("reg")
-            .args([
-                "query",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location",
-                "/v",
-                "Value",
-            ])
-            .output()
-        {
-            let text = String::from_utf8_lossy(&output.stdout);
-            if text.contains("Allow") {
-                return CheckResult::warning(
-                    "OS_LOCATION_ENABLED",
-                    "В Windows включены службы геолокации (BSSID Wi-Fi). Отключите доступ к геопозиции для браузеров и десктопных приложений ИИ.",
-                    Some(GUIDE_OS_PRIVACY.to_string()),
-                );
-            }
-        }
-        CheckResult::ok("OS_LOCATION_SAFE", "Службы геолокации Windows ограничены (BSSID защищен).")
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        CheckResult::ok(
-            "OS_LOCATION_SAFE",
-            "Защита Wi-Fi BSSID: убедитесь, что для Claude и браузера отключена геолокация в Системных настройках.",
-        )
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        CheckResult::ok("OS_LOCATION_SAFE", "Службы геолокации ОС не передают BSSID.")
-    }
 }
 
 #[cfg(test)]

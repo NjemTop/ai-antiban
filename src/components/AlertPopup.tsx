@@ -2,47 +2,51 @@ import React, { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "@tauri-apps/api/core";
 import {
-  AlertOctagon,
-  AlertTriangle,
-  ArrowRight,
+  Shield,
   ShieldX,
-  Clock,
   Zap,
   CheckCircle2,
+  ArrowRight,
+  Clock,
 } from "lucide-react";
 import { InterceptionAction, RiskInterceptPayload } from "../types";
 import { resolveInterception } from "../utils/api";
 
 const DEFAULT_PAYLOAD: RiskInterceptPayload = {
-  id: "sim-default",
+  id: "sim-preview",
+  is_simulation: true,
   provider: "anthropic",
-  host: "api.anthropic.com:443 (Claude Desktop)",
+  host: "api.anthropic.com:443",
   ttl_seconds: 60,
+  network_change: {
+    old_ip: "185.212.102.40",
+    old_country: "NL",
+    new_ip: "185.220.101.5",
+    new_country: "RU",
+  },
   report: {
     provider: "anthropic",
     overall_status: "red",
     trust_score: 28,
     telemetry: {
       ip: "185.220.101.5",
-      country_code: "TR",
+      country_code: "RU",
       asn: 9009,
       isp: "M247 Europe SRL",
       org: "M247 Europe SRL",
-      timezone: "Europe/Istanbul",
+      timezone: "Europe/Moscow",
       resolved_at: Math.floor(Date.now() / 1000),
     },
     geo_result: {
       status: "critical",
-      code: "GEO_HIGH_RISK_TR",
-      message:
-        "Локация Турция (TR): высокий фрод-скор для Claude, полная блокировка для Google Gemini.",
+      code: "GEO_HIGH_RISK_RU",
+      message: "Локация RU не поддерживается сервисом ИИ.",
       guide_ref: "01-personal-vpn-15min",
     },
     pinning_result: {
       status: "warning",
       code: "PINNED_IP_NOT_CONFIGURED",
-      message:
-        "Трафик идет НЕ через закрепленный VPS. Обнаружен публичный коммерческий пул.",
+      message: "Трафик идет НЕ через закрепленный VPS.",
       guide_ref: "01-personal-vpn-15min",
     },
     travel_result: {
@@ -52,32 +56,29 @@ const DEFAULT_PAYLOAD: RiskInterceptPayload = {
       guide_ref: null,
     },
     dnsbl_result: {
-      status: "warning",
-      code: "DNSBL_LISTED",
-      message:
-        "IP числится в спам-базе DroneBL / AS9009 (M247 Shared VPN — 400+ соседей на узле).",
-      guide_ref: "01-personal-vpn-15min",
+      status: "ok",
+      code: "DNSBL_CLEAN",
+      message: "В спам-базах не числится.",
+      guide_ref: null,
     },
-    dnsbl_clean_count: "1/4 В базе",
+    dnsbl_clean_count: "4/4 Чисто",
     asn_result: {
-      status: "warning",
-      code: "ASN_SHARED_VPN",
-      message:
-        "Подсеть AS9009 (M247) принадлежит массовому коммерческому VPN.",
-      guide_ref: "01-personal-vpn-15min",
+      status: "ok",
+      code: "ASN_CLEAN",
+      message: "Чистая автономная система.",
+      guide_ref: null,
     },
     ipv6_result: {
       status: "ok",
       code: "IPV6_SAFE",
-      message: "Утечек по протоколу IPv6 не обнаружено.",
+      message: "Утечек IPv6 нет.",
       guide_ref: null,
     },
     timezone_result: {
-      status: "warning",
-      code: "TIMEZONE_MISMATCH",
-      message:
-        "Часовой пояс ОС (Europe/Moscow) выдает реальную локацию (IP: Europe/Istanbul).",
-      guide_ref: "03-os-privacy-setup",
+      status: "ok",
+      code: "TIMEZONE_OK",
+      message: "Часовой пояс согласован.",
+      guide_ref: null,
     },
     checks: [],
   },
@@ -99,6 +100,9 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
     initialPayload?.ttl_seconds || 60
   );
   const [resolving, setResolving] = useState<boolean>(false);
+  const [demoFeedback, setDemoFeedback] = useState<string | null>(null);
+
+  const isDemo = Boolean(payload.is_simulation || payload.id.startsWith("sim-"));
 
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;
@@ -117,10 +121,18 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
         setPayload({
           ...DEFAULT_PAYLOAD,
           id: e.detail.id || "sim-" + Date.now(),
+          is_simulation: true,
           provider: e.detail.provider || "anthropic",
-          host: e.detail.host || "api.anthropic.com:443 (Claude Desktop)",
+          host: e.detail.host || "api.anthropic.com:443",
+          network_change: {
+            old_ip: "185.212.102.40",
+            old_country: "NL",
+            new_ip: "185.220.101.5",
+            new_country: "RU",
+          },
         });
         setSecondsRemaining(60);
+        setDemoFeedback(null);
       }
     };
     window.addEventListener("simulate-interceptor-event", handleCustomSim);
@@ -133,7 +145,18 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
 
   useEffect(() => {
     if (secondsRemaining <= 0) {
-      handleAction("BlockUntilNetworkChange");
+      if (isDemo) {
+        // Safe timeout closure in simulation mode
+        resolveInterception(
+          payload.id,
+          "BlockUntilNetworkChange",
+          payload.provider,
+          "simulation"
+        ).catch(() => {});
+        if (onResolved) onResolved("BlockUntilNetworkChange");
+      } else {
+        handleAction("BlockUntilNetworkChange");
+      }
       return;
     }
 
@@ -142,11 +165,39 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [secondsRemaining]);
+  }, [secondsRemaining, isDemo]);
 
   const handleAction = async (action: InterceptionAction) => {
-    if (resolving) return;
+    if (resolving || demoFeedback) return;
     setResolving(true);
+
+    if (isDemo) {
+      let feedbackText = "Демо-режим: в реальной ситуации шлюз остановил бы трафик до включения VPN";
+      if (action === "AllowSession") {
+        feedbackText = "Демо-режим: сессия была бы разрешена";
+      } else if (action === "OpenGuideAndBlock") {
+        feedbackText = "Демо-режим: в реальной ситуации шлюз остановил бы трафик до включения VPN";
+      }
+
+      setDemoFeedback(feedbackText);
+
+      setTimeout(async () => {
+        try {
+          await resolveInterception(
+            payload.id,
+            action,
+            payload.provider,
+            "simulation"
+          );
+          if (onResolved) onResolved(action);
+        } catch (err) {
+          console.error("Failed to resolve demo interception:", err);
+        } finally {
+          setResolving(false);
+        }
+      }, 900);
+      return;
+    }
 
     try {
       await resolveInterception(
@@ -165,6 +216,7 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (resolving || demoFeedback) return;
       if (e.key === "1") {
         e.preventDefault();
         handleAction("OpenGuideAndBlock");
@@ -179,183 +231,160 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [payload, resolving]);
+  }, [payload, resolving, demoFeedback, isDemo]);
 
-  const { report, network_change, scope } = payload;
-  const isNetworkChange = scope === "network" || !!network_change;
-  const isSimulation = scope === "simulation" || payload.id.startsWith("sim-");
+  const { report, network_change } = payload;
+  const previousIp = network_change?.old_ip || (payload as any).previous_ip;
+  const previousCountry =
+    network_change?.old_country || (payload as any).previous_country || "VPN";
+  const currentIp =
+    network_change?.new_ip || report?.telemetry?.ip || "Неизвестный IP";
+  const currentCountry =
+    network_change?.new_country || report?.telemetry?.country_code || "??";
+  const targetHost = (payload.host || "api.anthropic.com").split(":")[0];
+
+  const explanation = previousIp
+    ? "Обнаружен обрыв VPN или резкая смена страны. Застава поставила запросы к ИИ на паузу, чтобы ваш аккаунт не получил бан."
+    : currentCountry === "RU" || currentCountry === "BY"
+    ? "Обнаружен неподдерживаемый регион подключения. Запрос к ИИ остановлен, чтобы аккаунт не был заблокирован."
+    : "Обнаружен риск для безопасности сессии ИИ. Застава заморозила запрос до возврата в доверенную сеть.";
 
   return (
-    <div className="w-[480px] h-[440px] max-h-screen bg-[#0A0B0E] text-zinc-100 flex flex-col justify-between border border-white/[0.1] border-t-2 border-t-rose-500 rounded-xl p-4 select-none overflow-hidden shadow-2xl">
-      {/* Header Bar */}
-      <div>
-        <div className="flex items-center justify-between pb-2.5 border-b border-white/[0.08]">
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-2.5 w-2.5">
+    <div
+      className={`w-[432px] mx-auto rounded-b-[24px] bg-[#07080d]/95 backdrop-blur-2xl border-x border-b shadow-[0_20px_50px_rgba(0,0,0,0.85)] px-4 pt-2.5 pb-3.5 animate-notch-drop select-none overflow-hidden space-y-2.5 text-zinc-100 font-sans ${
+        isDemo ? "border-sky-500/40" : "border-rose-500/40"
+      }`}
+    >
+      {/* 1. Top Notch Pill Bar */}
+      <div className="flex items-center justify-between pb-2 border-b border-white/[0.08]">
+        {isDemo ? (
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
+            <Shield className="w-3.5 h-3.5 text-sky-400 shrink-0" strokeWidth={2.2} />
+            <span className="text-[10px] font-bold uppercase tracking-wider text-sky-200 truncate font-mono">
+              ДЕМОНСТРАЦИЯ · СЕТЬ НЕ ЗАБЛОКИРОВАНА
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 min-w-0">
+            <span className="relative flex h-2 w-2 shrink-0">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500" />
             </span>
-            <span className="text-xs font-bold uppercase tracking-wider text-rose-400 font-sans">
-              {isSimulation
-                ? "ДЕМО-ТЕСТ: СИМУЛЯЦИЯ ПЕРЕХВАТА"
-                : isNetworkChange
-                ? "ОБНАРУЖЕНА РЕЗКАЯ СМЕНА СЕТИ (IP)"
-                : "ПЕРЕХВАТ ОПАСНОГО ЗАПРОСА"}
+            <Shield className="w-3.5 h-3.5 text-rose-400 shrink-0" strokeWidth={2.2} />
+            <span className="text-[10px] font-bold uppercase tracking-wider text-rose-300 truncate">
+              ТРАФИК ИИ ЗАМОРОЖЕН · УТЕЧКА ОСТАНОВЛЕНА
             </span>
           </div>
+        )}
 
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-mono text-zinc-400 tracking-wider">
-              {isSimulation
-                ? "УЧЕБНЫЙ ТЕСТ"
-                : isNetworkChange
-                ? "ТРАФИК НА ПАУЗЕ"
-                : "ПАКЕТ НА ПАУЗЕ"}
-            </span>
-            <div className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-500/15 border border-rose-500/30 text-rose-300 text-[10px] font-mono font-bold tabular-nums">
-              <Clock className="w-3 h-3 text-rose-400" strokeWidth={1.75} />
-              <span>{secondsRemaining}с</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Target Info */}
-        <div className="mt-2.5 flex items-center justify-between text-xs bg-[#12141A] px-2.5 py-1.5 rounded-lg border border-white/[0.06]">
-          <div className="flex items-center gap-2 truncate">
-            <span className="text-[10px] font-sans uppercase tracking-wider text-zinc-500 font-semibold">
-              {isNetworkChange ? "Смена:" : "Цель:"}
-            </span>
-            <span className="text-zinc-100 font-mono text-[11.5px] font-semibold truncate">
-              {isNetworkChange && network_change
-                ? `${network_change.old_ip || "?"} (${network_change.old_country || "?"}) ➔ ${network_change.new_ip} (${network_change.new_country})`
-                : payload.host}
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <span className="text-[10px] font-mono text-zinc-400">
-              IP: {report.telemetry.ip} ({report.telemetry.country_code})
-            </span>
-            <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-white/[0.08] text-[9.5px] font-mono uppercase text-amber-400 font-semibold">
-              {isNetworkChange ? "ВСЕ СЕРВИСЫ" : payload.provider}
-            </span>
-          </div>
-        </div>
-
-        {/* Advisory Subtitle */}
-        <div className="mt-2 text-[11px] font-sans text-zinc-400 leading-snug">
-          {isSimulation
-            ? "Учебная демонстрация (ваш реальный VPN не менялся). Пример того, как Застава замораживает соединение при опасном IP:"
-            : isNetworkChange
-            ? "Обнаружена смена IP-адреса. Все активные сессии и запросы заморожены (как обрыв связи), чтобы защитить аккаунты от бана:"
-            : "Соединение заморожено до отправки на сервер ИИ. Выявлены триггеры блокировки аккаунта:"}
-        </div>
-
-        {/* Risk Trigger Items */}
-        <div className="mt-2 space-y-1.5">
-          {/* Item 1: Primary Critical/Warning Reason (Geo, Travel, or Pinning) */}
-          <div className="bg-[#12141A] rounded-lg p-2 border border-rose-500/30 space-y-0.5">
-            <div className="flex items-center justify-between text-[10px]">
-              <span className="text-rose-400 font-bold font-sans flex items-center gap-1">
-                <AlertOctagon className="w-3 h-3" strokeWidth={1.75} />
-                <span>[ПРИЧИНА БЛОКА] Страна / Смена локации</span>
-              </span>
-              <span className="font-mono text-rose-300 font-semibold">
-                {report.telemetry.country_code} · {report.trust_score}%
-              </span>
-            </div>
-            <div className="text-[11px] font-sans text-zinc-200 leading-snug line-clamp-2">
-              {report.travel_result.status === "critical"
-                ? report.travel_result.message
-                : report.pinning_result.status === "critical"
-                ? report.pinning_result.message
-                : report.geo_result.message}
-            </div>
-          </div>
-
-          {/* Item 2: DNSBL / Spam */}
-          <div className="bg-[#12141A] rounded-lg p-2 border border-amber-500/25 space-y-0.5">
-            <div className="flex items-center justify-between text-[10px]">
-              <span className="text-amber-400 font-bold font-sans flex items-center gap-1">
-                <AlertTriangle className="w-3 h-3" strokeWidth={1.75} />
-                <span>[РИСК] Спам-базы DNSBL и публичный пул ASN</span>
-              </span>
-              <span className="font-mono text-zinc-400">
-                {report.telemetry.asn ? `AS${report.telemetry.asn}` : "AS9009"} · {report.dnsbl_clean_count}
-              </span>
-            </div>
-            <div className="text-[11px] font-sans text-zinc-300 truncate">
-              {report.dnsbl_result.status !== "ok"
-                ? report.dnsbl_result.message
-                : report.asn_result.message}
-            </div>
-          </div>
-
-          {/* Item 3: Environment / Timezone */}
-          <div className="bg-[#12141A] rounded-lg p-2 border border-white/[0.07] space-y-0.5">
-            <div className="flex items-center justify-between text-[10px]">
-              <span className="text-zinc-300 font-semibold font-sans flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3 text-amber-400" strokeWidth={1.75} />
-                <span>[СРЕДА ОС] Часовой пояс и привязка VPS</span>
-              </span>
-              <span className="font-mono text-zinc-500">Контроль утечек</span>
-            </div>
-            <div className="text-[11px] font-sans text-zinc-400 truncate">
-              {report.timezone_result.message}
-            </div>
-          </div>
+        <div
+          className={`flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-mono font-bold tabular-nums shrink-0 ml-2 ${
+            isDemo
+              ? "bg-sky-500/15 border-sky-500/30 text-sky-300"
+              : "bg-rose-500/15 border-rose-500/30 text-rose-300"
+          }`}
+        >
+          <Clock className="w-2.5 h-2.5 shrink-0" />
+          <span>{secondsRemaining}с</span>
         </div>
       </div>
 
-      {/* Action Buttons (3 Actions strictly per spec) */}
-      <div className="space-y-2 pt-2 border-t border-white/[0.08]">
-        <div className="flex items-center justify-between text-[10px] font-sans text-zinc-500 uppercase tracking-wider font-semibold">
-          <span>ВЫБЕРИТЕ ДЕЙСТВИЕ (ГОРЯЧИЕ КЛАВИШИ 1 · 2 · 3):</span>
-          <span className="font-mono text-[9.5px] text-zinc-600">Zero-MITM Hold</span>
+      {/* 2. Visual Route Change Pill (Crystal clear, zero jargon) */}
+      <div className="space-y-1.5">
+        <div className="bg-[#11131c]/90 rounded-xl px-3 py-1.5 border border-white/[0.08] flex items-center justify-between text-[11px] font-mono shadow-inner">
+          {previousIp ? (
+            <>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                <span className="text-zinc-400 text-[10px] shrink-0 font-mono">Был:</span>
+                <span className="text-emerald-300 font-bold truncate">
+                  {previousIp} ({previousCountry})
+                </span>
+              </div>
+              <ArrowRight className="w-3.5 h-3.5 text-zinc-500 shrink-0 mx-2" />
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0 animate-pulse" />
+                <span className="text-zinc-400 text-[10px] shrink-0 font-mono">Стал:</span>
+                <span className="text-rose-300 font-bold truncate">
+                  {currentIp} ({currentCountry})
+                </span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-zinc-400 text-[10px] shrink-0 font-mono">Цель:</span>
+                <span className="text-zinc-200 font-semibold truncate font-mono">
+                  {targetHost}
+                </span>
+              </div>
+              <ArrowRight className="w-3.5 h-3.5 text-zinc-500 shrink-0 mx-2" />
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0 animate-pulse" />
+                <span className="text-zinc-400 text-[10px] shrink-0 font-mono">Выход:</span>
+                <span className="text-rose-300 font-bold truncate font-mono">
+                  {currentIp} ({currentCountry})
+                </span>
+              </div>
+            </>
+          )}
         </div>
 
-        {/* Action 1: Primary Solution Guide */}
+        {/* Human-Friendly Explanation or Demo Status Message */}
+        {demoFeedback ? (
+          <div className="p-2 rounded-xl bg-sky-950/70 border border-sky-500/40 text-center animate-in fade-in duration-150">
+            <div className="text-[10.5px] font-medium text-sky-200 leading-tight">
+              {demoFeedback}
+            </div>
+          </div>
+        ) : (
+          <p className="text-[10.5px] text-zinc-300 font-sans leading-tight text-center px-1">
+            {explanation}
+          </p>
+        )}
+      </div>
+
+      {/* 3. 3 Clean Action Buttons (keyboard shortcuts 1, 2, 3) */}
+      <div className="space-y-1.5 pt-0.5">
+        {/* Full-width primary button (1) */}
         <button
           type="button"
-          disabled={resolving}
+          disabled={resolving || Boolean(demoFeedback)}
           onClick={() => handleAction("OpenGuideAndBlock")}
-          className="w-full py-2.5 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-sans font-bold text-xs flex items-center justify-between transition-all shadow-lg shadow-emerald-500/15 cursor-pointer disabled:opacity-50"
+          className="w-full py-2 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-[0.99] text-zinc-950 font-sans font-bold text-xs flex items-center justify-between transition-all shadow-md shadow-emerald-500/20 cursor-pointer disabled:opacity-50"
         >
-          <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4 fill-zinc-950 shrink-0" strokeWidth={2} />
-            <span>1. Инструкция по решению (Свой чистый VPN за 15 мин)</span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Zap className="w-3.5 h-3.5 fill-zinc-950 shrink-0" strokeWidth={2} />
+            <span className="truncate">1. Включить Чистый IP / Свой VPN</span>
           </div>
-          <ArrowRight className="w-4 h-4 shrink-0" strokeWidth={2} />
+          <span className="text-[9.5px] font-mono bg-zinc-950/20 px-1.5 py-0.5 rounded text-zinc-900 shrink-0 font-bold">
+            [1]
+          </span>
         </button>
 
-        {/* Secondary Action Buttons Grid */}
+        {/* Two bottom buttons side-by-side (3 & 2) */}
         <div className="grid grid-cols-2 gap-2">
-          {/* Action 3: Block until network change */}
+          {/* Button 3: Drop / Block */}
           <button
             type="button"
-            disabled={resolving}
+            disabled={resolving || Boolean(demoFeedback)}
             onClick={() => handleAction("BlockUntilNetworkChange")}
-            className="py-2 px-2.5 rounded-lg bg-[#12141A] hover:bg-zinc-900 border border-rose-500/30 hover:border-rose-500/50 text-rose-300 text-[11px] font-sans font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+            className="py-1.5 px-2 rounded-xl bg-[#12141c] hover:bg-[#181b24] active:scale-[0.99] border border-rose-500/35 hover:border-rose-500/55 text-rose-300 text-[10.5px] font-sans font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 truncate"
           >
-            <ShieldX className="w-3.5 h-3.5 shrink-0 text-rose-400" strokeWidth={1.75} />
-            <span className="truncate">
-              {isNetworkChange
-                ? "3. Блокировать до возврата на прошлый IP"
-                : "3. Блокировать до смены сети"}
-            </span>
+            <ShieldX className="w-3 h-3 shrink-0 text-rose-400" strokeWidth={2} />
+            <span className="truncate">3. Блокировать до VPN</span>
           </button>
 
-          {/* Action 2: Accept risk and continue */}
+          {/* Button 2: Allow */}
           <button
             type="button"
-            disabled={resolving}
+            disabled={resolving || Boolean(demoFeedback)}
             onClick={() => handleAction("AllowSession")}
-            className="py-2 px-2.5 rounded-lg bg-[#12141A] hover:bg-zinc-900 border border-white/[0.08] hover:border-white/[0.18] text-zinc-300 text-[11px] font-sans font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+            className="py-1.5 px-2 rounded-xl bg-[#12141c] hover:bg-[#181b24] active:scale-[0.99] border border-white/[0.1] hover:border-white/[0.2] text-zinc-300 hover:text-white text-[10.5px] font-sans font-medium flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 truncate"
           >
-            <span className="truncate">
-              {isNetworkChange
-                ? "2. Подтвердить новую сеть и продолжить"
-                : "2. Принять риск и продолжить"}
-            </span>
+            <CheckCircle2 className="w-3 h-3 shrink-0 text-zinc-400" strokeWidth={2} />
+            <span className="truncate">2. Разрешить сессию</span>
           </button>
         </div>
       </div>

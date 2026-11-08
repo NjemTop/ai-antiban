@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   ExternalLink,
   Copy,
@@ -11,12 +11,18 @@ import {
   Terminal,
   Award,
   Send,
+  Download,
+  Zap,
+  Clock,
+  Sparkles,
 } from "lucide-react";
 import { openExternal, openTelegramSupport } from "../utils/opener";
+import { openOsDatetimeSettings, syncAiAgentsTimezone } from "../utils/api";
 
 interface GuideViewerProps {
   initialGuide?: string;
   currentIp?: string;
+  currentTimezone?: string;
   onPinIp?: (ip: string) => void;
   onToast?: (
     title: string,
@@ -126,12 +132,62 @@ const VPS_PROVIDERS: VpsProvider[] = [
 export const GuideViewer: React.FC<GuideViewerProps> = ({
   initialGuide = "01-personal-vpn-15min",
   currentIp = "185.212.102.40",
+  currentTimezone,
   onPinIp,
   onToast,
 }) => {
-  const [activeTab, setActiveTab] = useState<string>(initialGuide);
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    if (initialGuide === "01-personal-vpn-amnezia" || initialGuide === "01-personal-vpn-15min") {
+      return "01-personal-vpn-15min";
+    }
+    return initialGuide;
+  });
+  const [guide1Mode, setGuide1Mode] = useState<"simple" | "advanced">("simple");
   const [vpnMethod, setVpnMethod] = useState<"cascade" | "cdn" | "ipv6">("cascade");
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [syncingTzGuide, setSyncingTzGuide] = useState<boolean>(false);
+  const [tzGuideSynced, setTzGuideSynced] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (initialGuide) {
+      if (initialGuide === "01-personal-vpn-amnezia" || initialGuide === "01-personal-vpn-15min") {
+        setActiveTab("01-personal-vpn-15min");
+      } else {
+        setActiveTab(initialGuide);
+      }
+    }
+  }, [initialGuide]);
+
+  const handleSyncTzInGuide = async () => {
+    const tz = currentTimezone || "Europe/London";
+    setSyncingTzGuide(true);
+    try {
+      const res = await syncAiAgentsTimezone(tz);
+      setTzGuideSynced(true);
+      if (onToast) {
+        onToast("Часовой пояс ИИ синхронизирован", res, "success");
+      }
+    } catch (err: any) {
+      if (onToast) {
+        onToast("Ошибка синхронизации TZ", err?.message || String(err), "error");
+      }
+    } finally {
+      setSyncingTzGuide(false);
+    }
+  };
+
+  const handleOpenOsClock = async () => {
+    try {
+      await openOsDatetimeSettings();
+      if (onToast) {
+        onToast("Настройки macOS", "Открываем «Дата и время» в Системных настройках", "info");
+      }
+    } catch (err: any) {
+      if (onToast) {
+        onToast("Ошибка открытия настроек", err?.message || String(err), "error");
+      }
+    }
+  };
 
   const copyCommand = (id: string, cmd: string, label: string) => {
     navigator.clipboard.writeText(cmd);
@@ -231,6 +287,173 @@ export const GuideViewer: React.FC<GuideViewerProps> = ({
             </p>
           </div>
 
+          {/* Mode Switcher: Simple Amnezia (Default) vs Advanced Xray */}
+          <div className="grid grid-cols-2 gap-1 p-0.5 bg-[#12141A] rounded-lg border border-white/[0.08] text-[11px] font-sans">
+            <button
+              type="button"
+              onClick={() => setGuide1Mode("simple")}
+              className={`py-1.5 px-2 rounded-md flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                guide1Mode === "simple"
+                  ? "bg-emerald-500/20 border border-emerald-500/35 text-emerald-300 font-semibold shadow-sm"
+                  : "text-zinc-400 hover:text-zinc-200 border border-transparent"
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Простой: Amnezia в 3 клика</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setGuide1Mode("advanced")}
+              className={`py-1.5 px-2 rounded-md flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                guide1Mode === "advanced"
+                  ? "bg-sky-500/20 border border-sky-500/35 text-sky-300 font-semibold shadow-sm"
+                  : "text-zinc-400 hover:text-zinc-200 border border-transparent"
+              }`}
+            >
+              <Terminal className="w-3.5 h-3.5 text-sky-400" />
+              <span>Продвинутый: Xray Reality</span>
+            </button>
+          </div>
+
+          {guide1Mode === "simple" ? (
+            <div className="space-y-2">
+              {/* Card 1: Rental VPS */}
+              <div className="bg-[#12141A] rounded-lg border border-white/[0.07] p-2.5 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-white font-sans">
+                    <span className="w-4 h-4 rounded bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px] font-mono">1</span>
+                    <span>Шаг 1. Арендуйте чистый VPS ($1–$4/мес)</span>
+                  </div>
+                  <span className="text-[9.5px] font-mono text-zinc-400">Оплата картой РФ / СБП</span>
+                </div>
+
+                <div className="space-y-1.5">
+                  {VPS_PROVIDERS.map((vps) => (
+                    <div key={vps.id} className="p-2 rounded bg-zinc-950/60 border border-white/[0.05] flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-semibold text-white">{vps.name}</span>
+                          <span className="px-1 py-0.2 rounded bg-emerald-500/10 text-emerald-400 text-[9px] font-mono">{vps.price}</span>
+                        </div>
+                        <div className="text-[10px] text-zinc-400 truncate">{vps.specs} · {vps.locations.join(", ")}</div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => copyPromo(vps)}
+                          className="px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-[9.5px] font-mono text-zinc-300 flex items-center gap-1 cursor-pointer"
+                        >
+                          {copiedCode === vps.id ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-zinc-400" />}
+                          <span>{vps.promoCode}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenProvider(vps)}
+                          className="px-2 py-1 rounded bg-zinc-100 hover:bg-white text-zinc-950 text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <span>Сайт</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Mockup 1: Email from hosting */}
+                <div className="p-2 rounded bg-black/40 border border-white/[0.06] font-mono text-[10px] space-y-1">
+                  <div className="text-zinc-400 font-sans text-[9.5px] font-semibold uppercase tracking-wider flex items-center justify-between">
+                    <span>Данные из письма хостинга на почте:</span>
+                    <span className="text-emerald-400 font-mono">ГОТОВО</span>
+                  </div>
+                  <div className="flex justify-between text-zinc-300">
+                    <span className="text-zinc-500">IP сервера:</span>
+                    <span className="text-emerald-400 font-semibold">45.142.214.88</span>
+                  </div>
+                  <div className="flex justify-between text-zinc-300">
+                    <span className="text-zinc-500">Логин:</span>
+                    <span>root</span>
+                  </div>
+                  <div className="flex justify-between text-zinc-300">
+                    <span className="text-zinc-500">Пароль:</span>
+                    <span className="text-zinc-400 tracking-widest">••••••••••••</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 2: Amnezia App Setup */}
+              <div className="bg-[#12141A] rounded-lg border border-white/[0.07] p-2.5 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-white font-sans">
+                    <span className="w-4 h-4 rounded bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px] font-mono">2</span>
+                    <span>Шаг 2. Авто-настройка в Amnezia VPN (3 клика)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openExternal("https://amnezia.org/ru/downloads")}
+                    className="px-2 py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[10px] font-sans font-semibold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Download className="w-3 h-3" />
+                    <span>Скачать Amnezia</span>
+                  </button>
+                </div>
+
+                {/* 3 UI Mockups */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-1.5">
+                  <div className="p-2 rounded bg-zinc-950/80 border border-white/[0.05] space-y-1">
+                    <div className="text-[9.5px] font-mono text-zinc-400 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                      <span>Экран 1: Выбор</span>
+                    </div>
+                    <div className="p-1.5 rounded bg-zinc-900 text-[10px] text-zinc-200 font-sans leading-tight">
+                      «У меня есть данные для подключения» → <strong>«Настроить свой сервер»</strong>
+                    </div>
+                  </div>
+
+                  <div className="p-2 rounded bg-zinc-950/80 border border-white/[0.05] space-y-1">
+                    <div className="text-[9.5px] font-mono text-zinc-400 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                      <span>Экран 2: Ввод</span>
+                    </div>
+                    <div className="p-1.5 rounded bg-zinc-900 text-[10px] text-zinc-200 font-sans leading-tight">
+                      Введите IP, root, пароль из шага 1. Amnezia настроит сервер за 2 мин.
+                    </div>
+                  </div>
+
+                  <div className="p-2 rounded bg-zinc-950/80 border border-white/[0.05] space-y-1">
+                    <div className="text-[9.5px] font-mono text-zinc-400 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                      <span>Экран 3: Старт</span>
+                    </div>
+                    <div className="p-1.5 rounded bg-emerald-950/40 border border-emerald-500/20 text-[10px] text-emerald-300 font-sans font-semibold text-center">
+                      Большая кнопка «ПОДКЛЮЧИТЬСЯ»
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 3: Check and Pin IP */}
+              <div className="bg-[#12141A] rounded-lg border border-emerald-500/25 p-2.5 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-white font-sans">
+                    <span className="w-4 h-4 rounded bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px] font-mono">3</span>
+                    <span>Шаг 3. Проверка и закрепление в Заставе</span>
+                  </div>
+                  <div className="text-[10px] text-zinc-400 mt-0.5">
+                    Текущий IP: <span className="text-emerald-400 font-mono font-semibold">{currentIp}</span> · Защита от разрывов
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onPinIp && onPinIp(currentIp)}
+                  className="py-1.5 px-2.5 rounded-md bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-sans text-[11px] font-bold flex items-center gap-1.5 shrink-0 cursor-pointer shadow-sm"
+                >
+                  <Pin className="w-3.5 h-3.5" strokeWidth={2} />
+                  <span>Закрепить IP</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
           {/* Native Partner Comparison Cards */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between px-0.5">
@@ -497,6 +720,8 @@ export const GuideViewer: React.FC<GuideViewerProps> = ({
               <span>Закрепить IP</span>
             </button>
           </div>
+            </>
+          )}
         </div>
       )}
 
@@ -606,6 +831,86 @@ export const GuideViewer: React.FC<GuideViewerProps> = ({
           </div>
 
           <div className="space-y-1.5">
+            {/* Step 1: Timezone Synchronization */}
+            <div className="bg-[#12141A] rounded-lg border border-amber-500/25 p-2.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-400 font-sans">
+                  <Clock className="w-3.5 h-3.5 shrink-0" strokeWidth={1.75} />
+                  <span>Шаг 1. Синхронизация часового пояса (снижает риск бана с 48% до 31%)</span>
+                </div>
+                <span className="px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-[9px] font-mono text-amber-300 font-bold">
+                  АНТИФРОД №1
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-300 font-sans leading-relaxed">
+                Антифрод Anthropic (Claude) и Stripe сверяют часовой пояс выходного IP и время устройства. Если трафик идет из Нидерландов, а система показывает UTC+3 (Москва), риск блокировки подписки возрастает с 31% до 48%.
+              </p>
+
+              {/* 1-Click Interactive Buttons */}
+              <div className="p-2 rounded-lg bg-zinc-950/70 border border-white/[0.06] space-y-2">
+                <div className="text-[10px] font-semibold text-zinc-300">
+                  Способ А. Для VS Code, Cursor, Claude Code и терминала (В 1 клик):
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSyncTzInGuide}
+                    disabled={syncingTzGuide}
+                    className="px-3 py-1.5 rounded-md bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-[11px] font-sans font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+                  >
+                    <Zap className="w-3.5 h-3.5 text-amber-400" />
+                    <span>
+                      {tzGuideSynced
+                        ? "Часовой пояс ИИ синхронизирован!"
+                        : syncingTzGuide
+                        ? "Синхронизация..."
+                        : "Авто-TZ для ИИ (VS Code / CLI)"}
+                    </span>
+                  </button>
+                </div>
+                <p className="text-[10px] text-zinc-400">
+                  Застава прописывает эталонную таймзону ({currentTimezone || "Europe/London"}) и <code className="text-zinc-200 font-mono">LANG=en_US.UTF-8</code> в конфиги редакторов без изменения системных часов.
+                </p>
+              </div>
+
+              <div className="p-2 rounded-lg bg-zinc-950/70 border border-white/[0.06] space-y-1.5">
+                <div className="text-[10px] font-semibold text-zinc-300">
+                  Способ Б. Для браузеров (Chrome, Safari, Arc):
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenOsClock}
+                    className="px-3 py-1.5 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-white/[0.1] text-zinc-200 hover:text-white text-[11px] font-sans font-medium flex items-center gap-1.5 cursor-pointer transition-colors"
+                  >
+                    <Clock className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>Часы macOS (Системные настройки)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      copyCommand(
+                        "cmd-settimezone-mac",
+                        "sudo systemsetup -settimezone Europe/Amsterdam",
+                        "Команда смены TZ в macOS"
+                      )
+                    }
+                    className="px-2.5 py-1.5 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-[10px] font-mono text-zinc-300 flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    {copiedCode === "cmd-settimezone-mac" ? (
+                      <Check className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3 h-3 text-zinc-400" />
+                    )}
+                    <span>sudo systemsetup -settimezone Europe/Amsterdam</span>
+                  </button>
+                </div>
+                <p className="text-[10px] text-zinc-400">
+                  Выключите автоопределение пояса и укажите столицу вашей VPN-локации (например, Амстердам для Нидерландов).
+                </p>
+              </div>
+            </div>
             <div className="bg-[#12141A] rounded-lg border border-white/[0.07] p-2.5 space-y-1">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-sans font-bold text-zinc-100">

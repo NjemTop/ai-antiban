@@ -1,10 +1,13 @@
 pub mod cache_cleaner;
+pub mod claude_exporter;
 pub mod dnsbl;
 pub mod geo_matrix;
 pub mod history;
 pub mod leaks;
 pub mod network;
+pub mod os_env;
 pub mod rules;
+pub mod telemetry;
 
 use serde::{Deserialize, Serialize};
 
@@ -12,10 +15,14 @@ pub use cache_cleaner::clean_ai_app_cache;
 pub use dnsbl::{check_all_dnsbl, evaluate_asn_reputation, evaluate_dnsbl_report};
 pub use geo_matrix::{evaluate_provider_geo, CheckResult, CheckStatus, ProviderId};
 pub use history::{evaluate_impossible_travel, evaluate_ip_pinning};
-pub use leaks::{
-    check_dns_leak, check_ipv6_leak, check_os_location_services, evaluate_system_timezone,
+pub use leaks::{check_dns_leak, check_ipv6_leak};
+pub use network::{
+    build_upstream_client, evaluate_dns_country_consistency, evaluate_reverse_dns_ptr,
+    NetworkResolver, NetworkTelemetry,
 };
-pub use network::{NetworkResolver, NetworkTelemetry};
+pub use os_env::{
+    check_os_location_services, evaluate_locale_env_hygiene, evaluate_system_timezone,
+};
 pub use rules::RuleSet;
 use crate::state::AppState;
 
@@ -76,7 +83,12 @@ impl Auditor {
         state: &AppState,
         force_refresh_telemetry: bool,
     ) -> Result<RiskReport, String> {
-        let telemetry = self.resolver.resolve(force_refresh_telemetry).await?;
+        let upstream_opt = state.get_upstream_proxy().await;
+        let active_upstream = upstream_opt.as_ref().filter(|c| c.enabled);
+        let telemetry = self
+            .resolver
+            .resolve_with_upstream(force_refresh_telemetry, active_upstream)
+            .await?;
 
         let matrix = self.rules.provider_matrix.read().await;
         let dangerous_asns = self.rules.dangerous_asns.read().await;
@@ -135,11 +147,23 @@ impl Auditor {
             &dangerous_asns.russian_isp_keywords,
         );
 
-        // 8. Timezone Check
-        let timezone_result = evaluate_system_timezone(telemetry.timezone.as_deref());
+        // 8. Timezone Check (Gate 8)
+        let timezone_result = evaluate_system_timezone(
+            telemetry.timezone.as_deref(),
+            state_data.synced_ai_timezone.as_deref(),
+        );
 
-        // 9. OS Location Services Check
+        // 9. OS Location Services Check (Gate 9)
         let location_result = check_os_location_services();
+
+        // 10. Reverse DNS PTR & Anonymizer Check (Gate 10)
+        let reverse_dns_result = evaluate_reverse_dns_ptr(&telemetry);
+
+        // 11. DNS Country Consistency Check (Gate 11)
+        let dns_country_result = evaluate_dns_country_consistency(&telemetry, None);
+
+        // 12. Locale & Environment Hygiene Check (Gate 12)
+        let locale_result = evaluate_locale_env_hygiene(state_data.synced_ai_timezone.as_deref());
 
         let checks = vec![
             geo_result.clone(),
@@ -151,6 +175,9 @@ impl Auditor {
             dns_result,
             timezone_result.clone(),
             location_result,
+            reverse_dns_result,
+            dns_country_result,
+            locale_result,
         ];
 
         // Compute Overall Status and Trust Score

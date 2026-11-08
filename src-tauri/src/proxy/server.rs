@@ -1,7 +1,7 @@
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
@@ -198,17 +198,26 @@ impl ProxyServer {
             None => {
                 // Direct pass-through for safe public non-AI domains: allows terminal users to set
                 // HTTPS_PROXY=http://127.0.0.1:8899 safely without breaking git, npm, brew, etc.
-                return self.tunnel_to_target(client, &host, port).await;
+                self.state.stats().record_direct_bypassed_host(&host);
+                return self.tunnel_to_target(client, &host, port, false).await;
             }
         };
 
-        // Step 0: Network guard — a sudden IP change freezes every connection until the
+        // Step 0: Fast Kernel Route Check & Network guard — a sudden IP change freezes every connection until the
         // user confirms the new network (or the old IP comes back).
+        let upstream_opt = self.state.get_upstream_proxy().await;
+        let active_upstream = upstream_opt.as_ref().filter(|c| c.enabled);
+        let upstream_key = active_upstream.map(|c| c.raw_key.as_str());
+        if self.guard.check_route_fingerprint_sync(upstream_key) {
+            self.auditor.resolver.invalidate_cache().await;
+        }
+
         self.guard.ensure_fresh().await;
         match self.guard.gate() {
             Gate::Open => {}
             Gate::Pending => {
                 if self.guard.await_decision().await != Gate::Open {
+                    self.state.stats().record_intercepted(&host, provider.as_str(), "BLOCKED", "??");
                     return send_forbidden(
                         client,
                         "Network change blocked by Zastava Risk Auditor: connection was not confirmed.",
@@ -217,6 +226,7 @@ impl ProxyServer {
                 }
             }
             Gate::Blocked => {
+                self.state.stats().record_intercepted(&host, provider.as_str(), "BLOCKED", "??");
                 return send_forbidden(
                     client,
                     "Network change blocked by Zastava Risk Auditor: switch back to the trusted IP or confirm the new network.",
@@ -227,12 +237,14 @@ impl ProxyServer {
 
         // Step 1: Check if provider is blocked
         if self.state.is_provider_blocked(provider.as_str()).await {
+            self.state.stats().record_intercepted(&host, provider.as_str(), "BLOCKED", "??");
             return send_forbidden(client, "Requests to this provider are blocked until network change.").await;
         }
 
         // Step 2: Check if provider has active session allowance
         if self.state.is_provider_session_allowed(provider.as_str()).await {
-            return self.tunnel_to_target(client, &host, port).await;
+            self.state.stats().record_protected(&host, provider.as_str(), "ALLOWED");
+            return self.tunnel_to_target(client, &host, port, true).await;
         }
 
         // Step 3: Run comprehensive risk audit
@@ -240,6 +252,7 @@ impl ProxyServer {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("Auditor evaluation failed: {e}");
+                self.state.stats().record_intercepted(&host, provider.as_str(), "ERROR", "??");
                 // In case of auditor error, fall back to hold for safety
                 return send_forbidden(client, &format!("Audit error: {e}")).await;
             }
@@ -254,10 +267,12 @@ impl ProxyServer {
                 report.telemetry.resolved_at,
             );
             let _ = self.state.record_ip_history(provider.as_str(), entry).await;
-            return self.tunnel_to_target(client, &host, port).await;
+            self.state.stats().record_protected(&host, provider.as_str(), &report.telemetry.country_code);
+            return self.tunnel_to_target(client, &host, port, true).await;
         }
 
         // Step 5: If verdict is Yellow or Red -> HOLD connection and alert UI
+        self.state.stats().record_intercepted(&host, provider.as_str(), "HELD", &report.telemetry.country_code);
         let hold_id = Uuid::new_v4().to_string();
         let rx = self.hold_queue.register(hold_id.clone(), provider.as_str()).await;
 
@@ -269,21 +284,13 @@ impl ProxyServer {
             ttl_seconds: DEFAULT_HOLD_TTL_SECS,
             scope: "provider".to_string(),
             network_change: None,
+            is_simulation: false,
         };
 
         // Emit event to UI and bring emergency modal to front
         if let Some(app) = &self.app_handle {
             let _ = app.emit("interceptor://risk-detected", &payload);
-            if let Some(popup) = app.get_webview_window("alert-popup") {
-                let _ = popup.show();
-                let _ = popup.unminimize();
-                let _ = popup.set_always_on_top(true);
-                let _ = popup.center();
-                let _ = popup.set_focus();
-            } else if let Some(main_win) = app.get_webview_window("main") {
-                let _ = main_win.show();
-                let _ = main_win.set_focus();
-            }
+            crate::show_and_position_alert_popup(app);
         }
 
         // Wait up to 60 seconds for user action
@@ -301,7 +308,8 @@ impl ProxyServer {
                     report.telemetry.resolved_at,
                 );
                 let _ = self.state.record_ip_history(provider.as_str(), entry).await;
-                self.tunnel_to_target(client, &host, port).await
+                self.state.stats().record_protected(&host, provider.as_str(), &report.telemetry.country_code);
+                self.tunnel_to_target(client, &host, port, true).await
             }
             _ => {
                 self.hold_queue.remove(&hold_id).await;
@@ -313,81 +321,97 @@ impl ProxyServer {
         }
     }
 
-    async fn tunnel_to_target(
-        &self,
-        client: &mut TcpStream,
-        host: &str,
-        port: u16,
-    ) -> Result<(), std::io::Error> {
-        let connect_res = match self.upstream_redirect {
-            Some(redirect_addr) => tokio::time::timeout(
-                Duration::from_secs(UPSTREAM_CONNECT_TIMEOUT_SECS),
-                TcpStream::connect(redirect_addr),
-            )
-            .await,
-            None => {
-                // Resolve DNS and block SSRF / DNS-rebinding to loopback, private, or link-local IPs
-                let addrs: Vec<SocketAddr> = match tokio::time::timeout(
-                    Duration::from_secs(UPSTREAM_CONNECT_TIMEOUT_SECS),
-                    tokio::net::lookup_host((host, port)),
-                )
-                .await
-                {
-                    Ok(Ok(resolved)) => resolved.collect(),
-                    Ok(Err(e)) => {
-                        let err_msg = format!("DNS resolution failed for {host}:{port}: {e}");
-                        let resp = format!(
-                            "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            err_msg.len(),
-                            err_msg
-                        );
-                        client.write_all(resp.as_bytes()).await?;
-                        client.flush().await?;
-                        return Err(e);
-                    }
-                    Err(_) => {
-                        let err_msg = format!("DNS resolution timed out for {host}:{port}");
-                        let resp = format!(
-                            "HTTP/1.1 504 Gateway Timeout\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            err_msg.len(),
-                            err_msg
-                        );
-                        client.write_all(resp.as_bytes()).await?;
-                        client.flush().await?;
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            "DNS lookup timeout",
-                        ));
-                    }
-                };
-
-                if addrs.is_empty() {
-                    return send_forbidden(client, "No valid upstream addresses resolved.").await;
-                }
-
-                for addr in &addrs {
-                    if is_forbidden_ip(&addr.ip()) {
-                        return send_forbidden(
-                            client,
-                            "SSRF Protection: resolved IP belongs to a restricted local or private network.",
-                        )
-                        .await;
-                    }
-                }
-
-                tokio::time::timeout(
-                    Duration::from_secs(UPSTREAM_CONNECT_TIMEOUT_SECS),
-                    TcpStream::connect(addrs.as_slice()),
-                )
-                .await
+    async fn connect_direct(&self, host: &str, port: u16) -> Result<TcpStream, std::io::Error> {
+        let addrs: Vec<SocketAddr> = match tokio::time::timeout(
+            Duration::from_secs(UPSTREAM_CONNECT_TIMEOUT_SECS),
+            tokio::net::lookup_host((host, port)),
+        )
+        .await
+        {
+            Ok(Ok(resolved)) => resolved.collect(),
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "DNS lookup timeout",
+                ));
             }
         };
-        let connect_fut = match connect_res {
+
+        if addrs.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "No valid upstream addresses resolved.",
+            ));
+        }
+
+        for addr in &addrs {
+            if is_forbidden_ip(&addr.ip()) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "SSRF Protection: resolved IP belongs to a restricted local or private network.",
+                ));
+            }
+        }
+
+        match tokio::time::timeout(
+            Duration::from_secs(UPSTREAM_CONNECT_TIMEOUT_SECS),
+            TcpStream::connect(addrs.as_slice()),
+        )
+        .await
+        {
             Ok(res) => res,
             Err(_) => Err(std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
                 "upstream connect timeout",
             )),
+        }
+    }
+
+    async fn tunnel_to_target(
+        &self,
+        client: &mut TcpStream,
+        host: &str,
+        port: u16,
+        use_upstream: bool,
+    ) -> Result<(), std::io::Error> {
+        let _tunnel_guard = if use_upstream || ProviderId::from_host(host).is_some() {
+            Some(self.state.stats().enter_tunnel())
+        } else {
+            None
+        };
+
+        let connect_fut = if let Some(redirect_addr) = self.upstream_redirect {
+            tokio::time::timeout(
+                Duration::from_secs(UPSTREAM_CONNECT_TIMEOUT_SECS),
+                TcpStream::connect(redirect_addr),
+            )
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "upstream redirect connect timeout",
+                )
+            })
+            .and_then(|r| r)
+        } else if use_upstream {
+            if let Some(cfg) = self.state.get_upstream_proxy().await {
+                if cfg.enabled {
+                    crate::proxy::upstream::connect_via_upstream(
+                        &cfg,
+                        host,
+                        port,
+                        Duration::from_secs(UPSTREAM_CONNECT_TIMEOUT_SECS),
+                    )
+                    .await
+                } else {
+                    self.connect_direct(host, port).await
+                }
+            } else {
+                self.connect_direct(host, port).await
+            }
+        } else {
+            self.connect_direct(host, port).await
         };
 
         let mut target_stream = match connect_fut {
@@ -415,8 +439,8 @@ impl ProxyServer {
 }
 
 /// Bidirectional relay that obeys the network guard: while the gate is closed no byte is
-/// forwarded in either direction, so established sessions simply "hang" like a dead network
-/// and are dropped after `MAX_STALL_SECS` unless the user confirms the new network.
+/// forwarded in either direction, and any established session aborts immediately when
+/// the network route changes or the gate closes.
 async fn pump(
     client: &mut TcpStream,
     target: &mut TcpStream,
@@ -440,11 +464,12 @@ where
     W: AsyncWrite + Unpin,
 {
     let mut rx = guard.subscribe();
+    let mut abort_rx = guard.subscribe_tunnel_abort();
     let mut buf = vec![0u8; 16 * 1024];
     let stalled = || {
         std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "tunnel stalled: network change not confirmed",
+            std::io::ErrorKind::ConnectionReset,
+            "tunnel aborted: network route changed or closed",
         )
     };
 
@@ -455,7 +480,12 @@ where
 
         let n = tokio::select! {
             res = reader.read(&mut buf) => res?,
-            _ = gate_closed(&mut rx) => continue,
+            _ = gate_closed(&mut rx) => {
+                return Err(stalled());
+            }
+            _ = abort_rx.changed() => {
+                return Err(stalled());
+            }
         };
 
         if n == 0 {
@@ -464,7 +494,7 @@ where
         }
 
         // Data read right before the freeze is held back until the user decides.
-        if !wait_open(&mut rx).await {
+        if !wait_open(&mut rx).await || guard.gate() != Gate::Open {
             return Err(stalled());
         }
         writer.write_all(&buf[..n]).await?;

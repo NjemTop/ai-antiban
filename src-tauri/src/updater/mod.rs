@@ -48,6 +48,12 @@ pub struct UpdateProgressPayload {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateStatusPayload {
+    pub stage: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallUpdateResult {
     pub success: bool,
     pub message: String,
@@ -211,6 +217,14 @@ pub async fn download_and_install_update(
     let target_file = update_dir.join(&safe_name);
 
     let _ = app.emit(
+        "updater://status",
+        UpdateStatusPayload {
+            stage: "downloading".to_string(),
+            message: "Скачивание пакета обновления...".to_string(),
+        },
+    );
+
+    let _ = app.emit(
         "updater://progress",
         UpdateProgressPayload {
             downloaded_bytes: 0,
@@ -364,9 +378,17 @@ fn apply_platform_update(
                 },
             );
 
+            let _ = app.emit(
+                "updater://status",
+                UpdateStatusPayload {
+                    stage: "installing".to_string(),
+                    message: "Установка и перезапуск Заставы...".to_string(),
+                },
+            );
+
             let app_clone = app.clone();
             tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(600)).await;
+                tokio::time::sleep(Duration::from_millis(400)).await;
                 crate::sysproxy::disable_all_sysproxy();
                 app_clone.exit(0);
             });
@@ -393,51 +415,130 @@ fn apply_platform_update(
         }
     }
 
-    // Fallback for .dmg installer
-    let _ = std::process::Command::new("xattr")
-        .args(["-cr", &target_file.to_string_lossy()])
+    // Silent automatic DMG installation and restart
+    let _ = app.emit(
+        "updater://status",
+        UpdateStatusPayload {
+            stage: "installing".to_string(),
+            message: "Установка и перезапуск Заставы...".to_string(),
+        },
+    );
+
+    let target_app = find_current_app_bundle()
+        .filter(|p| !p.starts_with("/Volumes"))
+        .unwrap_or_else(|| std::path::PathBuf::from("/Applications/Zastava.app"));
+
+    let script_path = update_dir.join("zastava_autoupdate.sh");
+    let script = format!(
+        r#"#!/bin/sh
+sleep 1
+MOUNT_DIR="/tmp/zastava_dmg_mount_$$"
+mkdir -p "$MOUNT_DIR"
+if hdiutil attach -nobrowse -readonly -noverify -mountpoint "$MOUNT_DIR" "{dmg_path}" >/dev/null 2>&1; then
+  APP_SRC=$(find "$MOUNT_DIR" -maxdepth 2 -name "*.app" | head -n 1)
+  if [ -n "$APP_SRC" ]; then
+    rm -rf "{target_app}"
+    ditto "$APP_SRC" "{target_app}"
+    xattr -cr "{target_app}" >/dev/null 2>&1 || true
+    hdiutil detach "$MOUNT_DIR" -force -quiet >/dev/null 2>&1 || true
+    rm -rf "$MOUNT_DIR"
+    open "{target_app}"
+    exit 0
+  fi
+  hdiutil detach "$MOUNT_DIR" -force -quiet >/dev/null 2>&1 || true
+fi
+# Fallback: если что-то пошло не так (например нет прав на /Applications), открываем DMG
+open "{dmg_path}"
+"#,
+        dmg_path = target_file.display(),
+        target_app = target_app.display()
+    );
+
+    std::fs::write(&script_path, script)
+        .map_err(|e| format!("Не удалось создать скрипт автообновления: {e}"))?;
+
+    let _ = std::process::Command::new("chmod")
+        .args(["+x", &script_path.to_string_lossy()])
         .status();
-    std::process::Command::new("open")
-        .arg(target_file)
+
+    std::process::Command::new("sh")
+        .arg(&script_path)
         .spawn()
-        .map_err(|e| format!("Не удалось открыть образ DMG: {e}"))?;
+        .map_err(|e| format!("Не удалось запустить скрипт обновления: {e}"))?;
 
-    Ok(InstallUpdateResult {
-        success: true,
-        message: "Образ обновления DMG скачан и открыт. Перетащите Zastava в Программы.".to_string(),
-        will_restart: false,
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn apply_platform_update(
-    app: &tauri::AppHandle,
-    _update_dir: &Path,
-    target_file: &Path,
-    safe_name: &str,
-) -> Result<InstallUpdateResult, String> {
-    if safe_name.ends_with(".msi") {
-        std::process::Command::new("msiexec")
-            .args(["/i", &target_file.to_string_lossy()])
-            .spawn()
-            .map_err(|e| format!("Не удалось запустить MSI-установщик: {e}"))?;
-    } else {
-        std::process::Command::new(target_file)
-            .spawn()
-            .map_err(|e| format!("Не удалось запустить установщик обновления: {e}"))?;
-    }
+    let _ = app.emit(
+        "updater://progress",
+        UpdateProgressPayload {
+            downloaded_bytes: 100,
+            total_bytes: 100,
+            percent: 100,
+            phase: "Перезапуск Заставы...".to_string(),
+        },
+    );
 
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(600)).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
         crate::sysproxy::disable_all_sysproxy();
         app_clone.exit(0);
     });
 
     Ok(InstallUpdateResult {
         success: true,
-        message: "Установщик обновления запущен! Приложение закроется для завершения обновления."
-            .to_string(),
+        message: "Обновление установлено! Приложение сейчас перезапустится.".to_string(),
+        will_restart: true,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn apply_platform_update(
+    app: &tauri::AppHandle,
+    update_dir: &Path,
+    target_file: &Path,
+    safe_name: &str,
+) -> Result<InstallUpdateResult, String> {
+    let _ = app.emit(
+        "updater://status",
+        UpdateStatusPayload {
+            stage: "installing".to_string(),
+            message: "Установка и перезапуск Заставы...".to_string(),
+        },
+    );
+
+    let target_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("Zastava.exe"));
+    let bat_path = update_dir.join("zastava_autoupdate.bat");
+
+    if safe_name.ends_with(".msi") {
+        let bat_content = format!(
+            "@echo off\r\ntimeout /t 1 /nobreak >nul\r\nmsiexec /i \"{installer}\" /qn\r\nstart \"\" \"{target}\"\r\n",
+            installer = target_file.display(),
+            target = target_exe.display()
+        );
+        let _ = std::fs::write(&bat_path, bat_content);
+    } else {
+        let bat_content = format!(
+            "@echo off\r\ntimeout /t 1 /nobreak >nul\r\nstart /wait \"\" \"{installer}\" /S\r\nstart \"\" \"{target}\"\r\n",
+            installer = target_file.display(),
+            target = target_exe.display()
+        );
+        let _ = std::fs::write(&bat_path, bat_content);
+    }
+
+    std::process::Command::new("cmd")
+        .args(["/C", &bat_path.to_string_lossy()])
+        .spawn()
+        .map_err(|e| format!("Не удалось запустить установщик обновления: {e}"))?;
+
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        crate::sysproxy::disable_all_sysproxy();
+        app_clone.exit(0);
+    });
+
+    Ok(InstallUpdateResult {
+        success: true,
+        message: "Установщик запущен! Застава перезапустится после обновления.".to_string(),
         will_restart: true,
     })
 }

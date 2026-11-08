@@ -45,6 +45,8 @@ pub struct RiskInterceptPayload {
     pub scope: String,
     #[serde(default)]
     pub network_change: Option<NetworkChange>,
+    #[serde(default)]
+    pub is_simulation: bool,
 }
 
 fn default_scope() -> String {

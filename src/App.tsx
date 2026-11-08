@@ -10,10 +10,15 @@ function App() {
   const [showBrowserSimulation, setShowBrowserSimulation] = useState<boolean>(false);
 
   useEffect(() => {
-    // 1. Check URL parameters / hash (e.g. ?window=alert-popup or #alert-popup)
+    // 1. Check URL parameters / hash (e.g. ?window=alert-popup or #alert or #alert-popup)
     const params = new URLSearchParams(window.location.search);
     const winParam = params.get("window");
-    if (winParam === "alert-popup" || window.location.hash === "#alert-popup") {
+    if (
+      winParam === "alert-popup" ||
+      winParam === "alert" ||
+      window.location.hash === "#alert-popup" ||
+      window.location.hash === "#alert"
+    ) {
       setWindowLabel("alert-popup");
       return;
     }
@@ -32,10 +37,24 @@ function App() {
     }
   }, []);
 
-  // When current window is alert-popup, render dedicated 480x420 popup
+  useEffect(() => {
+    const isAlert =
+      windowLabel === "alert-popup" ||
+      window.location.hash === "#alert" ||
+      window.location.hash === "#alert-popup";
+    if (isAlert) {
+      document.documentElement.classList.add("is-alert-popup");
+      document.body.classList.add("is-alert-popup");
+    } else {
+      document.documentElement.classList.remove("is-alert-popup");
+      document.body.classList.remove("is-alert-popup");
+    }
+  }, [windowLabel]);
+
+  // When current window is alert-popup, render dedicated Dynamic Island Notch HUD popup
   if (windowLabel === "alert-popup") {
     return (
-      <div className="w-full min-h-screen bg-[#0A0B0E] flex items-center justify-center">
+      <div className="w-full h-screen bg-transparent overflow-hidden flex items-start justify-center p-0 m-0">
         <AlertPopup />
       </div>
     );

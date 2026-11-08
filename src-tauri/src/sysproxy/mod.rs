@@ -352,19 +352,166 @@ fn is_zastava_local_proxy_val(val: &str) -> bool {
 /// Zastava is actively listening on `127.0.0.1:<port>`. If Zastava is closed, `nc -z`
 /// exits immediately and the terminal works directly without proxy errors.
 pub fn build_shell_rc_guard_block(proxy_url: &str, port: u16) -> String {
+    build_shell_rc_guard_block_with_tz(proxy_url, port, None)
+}
+
+/// Builds the shell RC block including optional timezone and clean UTF-8 locale sync.
+pub fn build_shell_rc_guard_block_with_tz(
+    proxy_url: &str,
+    port: u16,
+    tz: Option<&str>,
+) -> String {
+    let mut tz_exports = String::new();
+    if let Some(timezone) = tz {
+        let trimmed_tz = timezone.trim();
+        if !trimmed_tz.is_empty() {
+            tz_exports = format!(
+                "\n  export TZ=\"{trimmed_tz}\"\n  export LANG=\"en_US.UTF-8\"\n  export LC_TIME=\"en_US.UTF-8\"\n  export LC_ALL=\"en_US.UTF-8\""
+            );
+        }
+    }
     format!(
-        "{start}\nif command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 {port} >/dev/null 2>&1; then\n  export HTTP_PROXY=\"{url}\"\n  export HTTPS_PROXY=\"{url}\"\n  export ALL_PROXY=\"{url}\"\n  export http_proxy=\"{url}\"\n  export https_proxy=\"{url}\"\n  export all_proxy=\"{url}\"\n  export NO_PROXY=\"{no_proxy}\"\n  export no_proxy=\"{no_proxy}\"\nfi\n{end}",
+        "{start}\nif command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 {port} >/dev/null 2>&1; then\n  export HTTP_PROXY=\"{url}\"\n  export HTTPS_PROXY=\"{url}\"\n  export ALL_PROXY=\"{url}\"\n  export http_proxy=\"{url}\"\n  export https_proxy=\"{url}\"\n  export all_proxy=\"{url}\"\n  export NO_PROXY=\"{no_proxy}\"\n  export no_proxy=\"{no_proxy}\"{tz_exports}\nfi\n{end}",
         start = ZASTAVA_RC_START,
         port = port,
         url = proxy_url,
         no_proxy = NO_PROXY_VALUE,
+        tz_exports = tz_exports,
         end = ZASTAVA_RC_END
     )
 }
 
+/// Builds the PowerShell profile block with proxy settings and optional timezone/locale.
+pub fn build_powershell_guard_block_with_tz(
+    proxy_url: &str,
+    tz: Option<&str>,
+) -> String {
+    let mut block = format!(
+        "{start}\n$env:HTTP_PROXY = \"{url}\"\n$env:HTTPS_PROXY = \"{url}\"\n$env:ALL_PROXY = \"{url}\"\n$env:http_proxy = \"{url}\"\n$env:https_proxy = \"{url}\"\n$env:all_proxy = \"{url}\"\n$env:NO_PROXY = \"{no_proxy}\"\n$env:no_proxy = \"{no_proxy}\"\n$env:LANG = \"en_US.UTF-8\"\n$env:LC_TIME = \"en_US.UTF-8\"\n$env:LC_ALL = \"en_US.UTF-8\"",
+        start = ZASTAVA_RC_START,
+        url = proxy_url,
+        no_proxy = NO_PROXY_VALUE,
+    );
+    if let Some(timezone) = tz {
+        let trimmed = timezone.trim();
+        if !trimmed.is_empty() {
+            block.push_str(&format!("\n$env:TZ = \"{trimmed}\""));
+        }
+    }
+    block.push_str(&format!("\n{end}", end = ZASTAVA_RC_END));
+    block
+}
+
+/// Idempotently inserts or updates the Zastava CLI guard block inside a PowerShell profile file content.
+pub fn upsert_powershell_profile_content_with_tz(
+    existing: &str,
+    proxy_url: &str,
+    tz: Option<&str>,
+) -> String {
+    let block = build_powershell_guard_block_with_tz(proxy_url, tz);
+    if let (Some(start_idx), Some(end_idx)) = (
+        existing.find(ZASTAVA_RC_START),
+        existing.find(ZASTAVA_RC_END),
+    ) {
+        if start_idx <= end_idx {
+            let after_end = end_idx + ZASTAVA_RC_END.len();
+            let mut result = String::with_capacity(existing.len() + block.len());
+            result.push_str(&existing[..start_idx]);
+            result.push_str(&block);
+            result.push_str(&existing[after_end..]);
+            return result;
+        }
+    }
+
+    let mut result = existing.to_string();
+    if !result.is_empty() && !result.ends_with('\n') {
+        result.push('\n');
+    }
+    if !result.is_empty() {
+        result.push('\n');
+    }
+    result.push_str(&block);
+    result.push('\n');
+    result
+}
+
+pub fn get_windows_powershell_profile_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(home) = user_home_dir() {
+        let docs = home.join("Documents");
+        paths.push(docs.join("PowerShell").join("Microsoft.PowerShell_profile.ps1"));
+        paths.push(docs.join("WindowsPowerShell").join("Microsoft.PowerShell_profile.ps1"));
+    }
+    paths
+}
+
+#[cfg(target_os = "windows")]
+pub fn set_windows_user_env_var(name: &str, value: &str) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    std::process::Command::new("reg")
+        .args(["add", r"HKCU\Environment", "/v", name, "/t", "REG_SZ", "/d", value, "/f"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn delete_windows_user_env_var(name: &str) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let _ = std::process::Command::new("reg")
+        .args(["delete", r"HKCU\Environment", "/v", name, "/f"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+pub fn broadcast_windows_env_change() {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SendMessageTimeoutW(
+            hWnd: *mut core::ffi::c_void,
+            Msg: u32,
+            wParam: usize,
+            lParam: *const u16,
+            fuFlags: u32,
+            uTimeout: u32,
+            lpdwResult: *mut usize,
+        ) -> isize;
+    }
+    const HWND_BROADCAST: *mut core::ffi::c_void = 0xffff as *mut core::ffi::c_void;
+    const WM_SETTINGCHANGE: u32 = 0x001A;
+    const SMTO_ABORTIFHUNG: u32 = 0x0002;
+    let env_str: Vec<u16> = "Environment\0".encode_utf16().collect();
+    let mut dw_result: usize = 0;
+    unsafe {
+        let _ = SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            env_str.as_ptr(),
+            SMTO_ABORTIFHUNG,
+            1000,
+            &mut dw_result,
+        );
+    }
+}
+
 /// Idempotently inserts or updates the Zastava CLI guard block inside a shell RC file content.
 pub fn upsert_shell_rc_content(existing: &str, proxy_url: &str, port: u16) -> String {
-    let block = build_shell_rc_guard_block(proxy_url, port);
+    upsert_shell_rc_content_with_tz(existing, proxy_url, port, None)
+}
+
+/// Idempotently inserts or updates the Zastava CLI guard block with timezone synchronization.
+pub fn upsert_shell_rc_content_with_tz(
+    existing: &str,
+    proxy_url: &str,
+    port: u16,
+    tz: Option<&str>,
+) -> String {
+    let block = build_shell_rc_guard_block_with_tz(proxy_url, port, tz);
     if let (Some(start_idx), Some(end_idx)) = (
         existing.find(ZASTAVA_RC_START),
         existing.find(ZASTAVA_RC_END),
@@ -496,6 +643,15 @@ fn ide_env_key() -> &'static str {
 
 /// Applies Zastava proxy configuration to a VS Code / Cursor / Windsurf `settings.json` file.
 pub fn apply_ide_settings_file(settings_path: &Path, proxy_url: &str) -> Result<bool, String> {
+    apply_ide_settings_file_with_tz(settings_path, proxy_url, None)
+}
+
+/// Applies Zastava proxy and optional timezone/locale configuration to a VS Code / Cursor / Windsurf `settings.json` file.
+pub fn apply_ide_settings_file_with_tz(
+    settings_path: &Path,
+    proxy_url: &str,
+    tz: Option<&str>,
+) -> Result<bool, String> {
     let raw = if settings_path.exists() {
         fs::read_to_string(settings_path).map_err(|e| e.to_string())?
     } else {
@@ -534,6 +690,15 @@ pub fn apply_ide_settings_file(settings_path: &Path, proxy_url: &str) -> Result<
             "NO_PROXY".to_string(),
             Value::String(NO_PROXY_VALUE.to_string()),
         );
+        if let Some(timezone) = tz {
+            let trimmed = timezone.trim();
+            if !trimmed.is_empty() {
+                env_map.insert("TZ".to_string(), Value::String(trimmed.to_string()));
+                env_map.insert("LANG".to_string(), Value::String("en_US.UTF-8".to_string()));
+                env_map.insert("LC_TIME".to_string(), Value::String("en_US.UTF-8".to_string()));
+                env_map.insert("LC_ALL".to_string(), Value::String("en_US.UTF-8".to_string()));
+            }
+        }
     }
 
     let formatted = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
@@ -582,6 +747,10 @@ pub fn cleanup_ide_settings_file(settings_path: &Path) -> Result<bool, String> {
                 env_map.remove("HTTPS_PROXY");
                 env_map.remove("ALL_PROXY");
                 env_map.remove("NO_PROXY");
+                env_map.remove("TZ");
+                env_map.remove("LANG");
+                env_map.remove("LC_TIME");
+                env_map.remove("LC_ALL");
                 changed = true;
             }
             if env_map.is_empty() {
@@ -603,6 +772,15 @@ pub fn cleanup_ide_settings_file(settings_path: &Path) -> Result<bool, String> {
 /// Applies Zastava proxy environment variables to `~/.claude/settings.json` (`env` block)
 /// so both the Claude Code VS Code extension and `claude` CLI route through Zastava immediately.
 pub fn apply_claude_code_settings_file(settings_path: &Path, proxy_url: &str) -> Result<bool, String> {
+    apply_claude_code_settings_file_with_tz(settings_path, proxy_url, None)
+}
+
+/// Applies Zastava proxy and timezone variables to `~/.claude/settings.json` (`env` block).
+pub fn apply_claude_code_settings_file_with_tz(
+    settings_path: &Path,
+    proxy_url: &str,
+    tz: Option<&str>,
+) -> Result<bool, String> {
     if let Some(parent) = settings_path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -633,11 +811,34 @@ pub fn apply_claude_code_settings_file(settings_path: &Path, proxy_url: &str) ->
             "NO_PROXY".to_string(),
             Value::String(NO_PROXY_VALUE.to_string()),
         );
+        if let Some(timezone) = tz {
+            let trimmed = timezone.trim();
+            if !trimmed.is_empty() {
+                env_map.insert("TZ".to_string(), Value::String(trimmed.to_string()));
+                env_map.insert("LANG".to_string(), Value::String("en_US.UTF-8".to_string()));
+                env_map.insert("LC_TIME".to_string(), Value::String("en_US.UTF-8".to_string()));
+                env_map.insert("LC_ALL".to_string(), Value::String("en_US.UTF-8".to_string()));
+            }
+        }
     }
 
     let formatted = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
     fs::write(settings_path, format!("{formatted}\n")).map_err(|e| e.to_string())?;
     Ok(true)
+}
+
+/// Applies Zastava proxy and timezone variables to `~/.gemini/settings.json` (`env` block).
+pub fn apply_gemini_cli_settings_file(
+    settings_path: &Path,
+    proxy_url: &str,
+    tz: Option<&str>,
+) -> Result<bool, String> {
+    apply_claude_code_settings_file_with_tz(settings_path, proxy_url, tz)
+}
+
+/// Removes Zastava local proxy variables from `~/.gemini/settings.json` when Zastava exits.
+pub fn cleanup_gemini_cli_settings_file(settings_path: &Path) -> Result<bool, String> {
+    cleanup_claude_code_settings_file(settings_path)
 }
 
 /// Removes Zastava local proxy variables from `~/.claude/settings.json` when Zastava exits.
@@ -666,6 +867,10 @@ pub fn cleanup_claude_code_settings_file(settings_path: &Path) -> Result<bool, S
             env_map.remove("HTTPS_PROXY");
             env_map.remove("ALL_PROXY");
             env_map.remove("NO_PROXY");
+            env_map.remove("TZ");
+            env_map.remove("LANG");
+            env_map.remove("LC_TIME");
+            env_map.remove("LC_ALL");
             changed = true;
         }
         if env_map.is_empty() {
@@ -740,22 +945,36 @@ fn candidate_ide_settings_paths() -> Vec<(&'static str, PathBuf)> {
 }
 
 /// Automatically configures CLI & IDE protection across:
-/// 1. `~/.claude/settings.json` (`env.HTTPS_PROXY`, `env.HTTP_PROXY`) for Claude Code CLI & VS Code extension
+/// 1. `~/.claude/settings.json` and `~/.gemini/settings.json` (`env.HTTPS_PROXY`, `env.HTTP_PROXY`, optional `TZ`)
 /// 2. VS Code / Cursor / Windsurf `settings.json` (`http.proxy` + `terminal.integrated.env.*`)
 /// 3. Shell profiles (`~/.zshrc`, `~/.bash_profile`) with an automatic `nc -z` liveness check
 /// 4. macOS `launchctl setenv` for GUI apps launched from Dock
 pub fn enable_cli_and_ide_protection(proxy_addr_or_url: &str) -> CliProtectionReport {
+    enable_cli_and_ide_protection_with_tz(proxy_addr_or_url, None)
+}
+
+/// Configures CLI & IDE protection with optional 1-click timezone (`TZ`) and UTF-8 locale sync.
+pub fn enable_cli_and_ide_protection_with_tz(
+    proxy_addr_or_url: &str,
+    tz: Option<&str>,
+) -> CliProtectionReport {
     let (proxy_url, port) = normalize_proxy_url_and_port(proxy_addr_or_url);
     let mut configured_targets = Vec::new();
 
     #[cfg(target_os = "macos")]
     {
-        let vars = [
+        let mut vars = vec![
             ("HTTP_PROXY", proxy_url.as_str()),
             ("HTTPS_PROXY", proxy_url.as_str()),
             ("ALL_PROXY", proxy_url.as_str()),
             ("NO_PROXY", NO_PROXY_VALUE),
         ];
+        if let Some(timezone) = tz {
+            let trimmed = timezone.trim();
+            if !trimmed.is_empty() {
+                vars.push(("TZ", trimmed));
+            }
+        }
         let mut launchd_ok = false;
         for (k, v) in vars {
             if std::process::Command::new("launchctl")
@@ -774,38 +993,103 @@ pub fn enable_cli_and_ide_protection(proxy_addr_or_url: &str) -> CliProtectionRe
     if let Some(home) = user_home_dir() {
         // 1. Claude Code settings (~/.claude/settings.json)
         let claude_settings = home.join(".claude").join("settings.json");
-        if apply_claude_code_settings_file(&claude_settings, &proxy_url).is_ok() {
+        if apply_claude_code_settings_file_with_tz(&claude_settings, &proxy_url, tz).is_ok() {
             configured_targets.push("Claude Code".to_string());
         }
 
-        // 2. Shell RC files on Unix (~/.zshrc, ~/.bash_profile)
+        // 2. Gemini CLI / Antigravity settings (~/.gemini/settings.json if directory exists)
+        let gemini_dir = home.join(".gemini");
+        if gemini_dir.is_dir() {
+            let gemini_settings = gemini_dir.join("settings.json");
+            if apply_gemini_cli_settings_file(&gemini_settings, &proxy_url, tz).is_ok() {
+                configured_targets.push("Gemini CLI".to_string());
+            }
+        }
+
+        // 3. Shell RC files on Unix (~/.zshenv, ~/.zshrc, ~/.bash_profile)
         #[cfg(unix)]
         {
-            for rc_name in [".zshrc", ".bash_profile"] {
+            let mut shell_configured = false;
+            for rc_name in [".zshenv", ".zshrc", ".bash_profile"] {
                 let rc_path = home.join(rc_name);
-                if rc_name == ".zshrc" || rc_path.exists() {
+                if rc_name == ".zshenv" || rc_name == ".zshrc" || rc_path.exists() {
                     let existing = fs::read_to_string(&rc_path).unwrap_or_default();
-                    let updated = upsert_shell_rc_content(&existing, &proxy_url, port);
-                    if fs::write(&rc_path, updated).is_ok() && rc_name == ".zshrc" {
-                        configured_targets.push("Терминал (~/.zshrc)".to_string());
+                    let updated = upsert_shell_rc_content_with_tz(&existing, &proxy_url, port, tz);
+                    if fs::write(&rc_path, updated).is_ok() {
+                        shell_configured = true;
                     }
                 }
+            }
+            if shell_configured {
+                configured_targets.push("Терминал (~/.zshenv, ~/.zshrc)".to_string());
+            }
+        }
+
+        // 3b. Windows User Environment & PowerShell Profiles
+        #[cfg(target_os = "windows")]
+        {
+            let vars = [
+                ("HTTP_PROXY", proxy_url.as_str()),
+                ("HTTPS_PROXY", proxy_url.as_str()),
+                ("ALL_PROXY", proxy_url.as_str()),
+                ("NO_PROXY", NO_PROXY_VALUE),
+                ("LANG", "en_US.UTF-8"),
+                ("LC_TIME", "en_US.UTF-8"),
+            ];
+            let mut reg_ok = false;
+            for (k, v) in vars {
+                if set_windows_user_env_var(k, v).is_ok() {
+                    reg_ok = true;
+                }
+            }
+            if let Some(timezone) = tz {
+                let trimmed = timezone.trim();
+                if !trimmed.is_empty() {
+                    let _ = set_windows_user_env_var("TZ", trimmed);
+                }
+            }
+            broadcast_windows_env_change();
+            if reg_ok {
+                configured_targets.push("Windows Реестр (HKCU\\Environment)".to_string());
+            }
+
+            let mut ps_configured = false;
+            for ps_path in get_windows_powershell_profile_paths() {
+                if let Some(parent) = ps_path.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                let existing = fs::read_to_string(&ps_path).unwrap_or_default();
+                let updated = upsert_powershell_profile_content_with_tz(&existing, &proxy_url, tz);
+                if fs::write(&ps_path, updated).is_ok() {
+                    ps_configured = true;
+                }
+            }
+            if ps_configured {
+                configured_targets.push("PowerShell ($PROFILE)".to_string());
             }
         }
     }
 
-    // 3. Installed IDEs (VS Code, Cursor, Windsurf, VSCodium, Antigravity)
+    // 4. Installed IDEs (VS Code, Cursor, Windsurf, VSCodium, Antigravity)
     for (label, settings_path) in candidate_ide_settings_paths() {
-        if apply_ide_settings_file(&settings_path, &proxy_url).unwrap_or(false) {
+        if apply_ide_settings_file_with_tz(&settings_path, &proxy_url, tz).unwrap_or(false) {
             configured_targets.push(label.to_string());
         }
     }
 
     CLI_PROTECTION_ACTIVE.store(true, Ordering::SeqCst);
 
-    let shell_command = format!(
+    let mut shell_command = format!(
         "export HTTP_PROXY=\"{proxy_url}\" HTTPS_PROXY=\"{proxy_url}\" ALL_PROXY=\"{proxy_url}\" NO_PROXY=\"{NO_PROXY_VALUE}\""
     );
+    if let Some(timezone) = tz {
+        let trimmed = timezone.trim();
+        if !trimmed.is_empty() {
+            shell_command.push_str(&format!(
+                " TZ=\"{trimmed}\" LANG=\"en_US.UTF-8\" LC_ALL=\"en_US.UTF-8\""
+            ));
+        }
+    }
 
     CliProtectionReport {
         enabled: true,
@@ -815,8 +1099,8 @@ pub fn enable_cli_and_ide_protection(proxy_addr_or_url: &str) -> CliProtectionRe
     }
 }
 
-/// Cleans up runtime proxy settings in IDE `settings.json`, `~/.claude/settings.json`, and
-/// macOS `launchctl` environment so apps work directly when Zastava is closed or disabled.
+/// Cleans up runtime proxy settings in IDE `settings.json`, `~/.claude/settings.json`,
+/// `~/.gemini/settings.json`, and macOS `launchctl` environment.
 pub fn disable_cli_and_ide_runtime_settings() {
     #[cfg(target_os = "macos")]
     {
@@ -829,6 +1113,7 @@ pub fn disable_cli_and_ide_runtime_settings() {
             "https_proxy",
             "all_proxy",
             "no_proxy",
+            "TZ",
         ] {
             let _ = std::process::Command::new("launchctl")
                 .args(["unsetenv", k])
@@ -839,10 +1124,172 @@ pub fn disable_cli_and_ide_runtime_settings() {
     if let Some(home) = user_home_dir() {
         let claude_settings = home.join(".claude").join("settings.json");
         let _ = cleanup_claude_code_settings_file(&claude_settings);
+
+        let gemini_settings = home.join(".gemini").join("settings.json");
+        if gemini_settings.exists() {
+            let _ = cleanup_gemini_cli_settings_file(&gemini_settings);
+        }
     }
 
     for (_label, settings_path) in candidate_ide_settings_paths() {
         let _ = cleanup_ide_settings_file(&settings_path);
+    }
+}
+
+pub fn remove_shell_rc_block(existing: &str) -> String {
+    if let (Some(start_idx), Some(end_idx)) = (
+        existing.find(ZASTAVA_RC_START),
+        existing.find(ZASTAVA_RC_END),
+    ) {
+        if start_idx <= end_idx {
+            let mut after_end = end_idx + ZASTAVA_RC_END.len();
+            if existing[after_end..].starts_with('\n') {
+                after_end += 1;
+            }
+            let mut result = String::with_capacity(existing.len());
+            result.push_str(&existing[..start_idx]);
+            result.push_str(&existing[after_end..]);
+            return result;
+        }
+    }
+    existing.to_string()
+}
+
+pub fn disable_cli_protection() {
+    CLI_PROTECTION_ACTIVE.store(false, Ordering::SeqCst);
+    disable_cli_and_ide_runtime_settings();
+    if let Some(home) = user_home_dir() {
+        for rc_name in [".zshenv", ".zshrc", ".bash_profile"] {
+            let rc_path = home.join(rc_name);
+            if rc_path.exists() {
+                if let Ok(content) = fs::read_to_string(&rc_path) {
+                    let cleaned = remove_shell_rc_block(&content);
+                    if cleaned != content {
+                        let _ = fs::write(&rc_path, cleaned);
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        for var_name in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "NO_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "no_proxy",
+            "TZ",
+            "LANG",
+            "LC_TIME",
+            "LC_ALL",
+        ] {
+            let _ = delete_windows_user_env_var(var_name);
+        }
+        broadcast_windows_env_change();
+
+        for ps_path in get_windows_powershell_profile_paths() {
+            if ps_path.exists() {
+                if let Ok(content) = fs::read_to_string(&ps_path) {
+                    let cleaned = remove_shell_rc_block(&content);
+                    if cleaned != content {
+                        let _ = fs::write(&ps_path, cleaned);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Checks whether CLI protection is currently enabled in memory, in shell RC files (~/.zshenv, ~/.zshrc, ~/.bash_profile),
+/// Claude/Gemini settings, or Windows registry/PowerShell environment.
+pub fn is_cli_protection_enabled() -> bool {
+    if CLI_PROTECTION_ACTIVE.load(Ordering::SeqCst) {
+        return true;
+    }
+    if let Some(home) = user_home_dir() {
+        for rc_name in [".zshenv", ".zshrc", ".bash_profile"] {
+            let rc_path = home.join(rc_name);
+            if rc_path.exists() {
+                if let Ok(content) = fs::read_to_string(&rc_path) {
+                    if content.contains(ZASTAVA_RC_START)
+                        || content.contains("# >>> ZASTAVA AI GUARD >>>")
+                        || content.to_ascii_uppercase().contains("ZASTAVA AI")
+                        || content.contains("127.0.0.1:8899")
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        let claude_settings = home.join(".claude").join("settings.json");
+        if claude_settings.exists() {
+            if let Ok(content) = fs::read_to_string(&claude_settings) {
+                if is_zastava_local_proxy_val(&content) {
+                    return true;
+                }
+            }
+        }
+        let gemini_settings = home.join(".gemini").join("settings.json");
+        if gemini_settings.exists() {
+            if let Ok(content) = fs::read_to_string(&gemini_settings) {
+                if is_zastava_local_proxy_val(&content) {
+                    return true;
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = std::process::Command::new("reg")
+            .args(["query", r"HKCU\Environment", "/v", "HTTP_PROXY"])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if is_zastava_local_proxy_val(&stdout) {
+                return true;
+            }
+        }
+        for ps_path in get_windows_powershell_profile_paths() {
+            if ps_path.exists() {
+                if let Ok(content) = fs::read_to_string(&ps_path) {
+                    if content.contains(ZASTAVA_RC_START) || is_zastava_local_proxy_val(&content) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Spawns the native OS date and time settings panel.
+pub fn open_os_datetime_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.datetime")
+            .spawn()
+            .map_err(|e| format!("Failed to open macOS date & time settings: {e}"))?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "ms-settings:dateandtime"])
+            .spawn()
+            .map_err(|e| format!("Failed to open Windows date & time settings: {e}"))?;
+        Ok(())
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Ok(())
     }
 }
 
@@ -877,6 +1324,11 @@ mod tests {
         assert_eq!(updated2.matches(ZASTAVA_RC_START).count(), 1);
         assert!(updated2.contains("nc -z 127.0.0.1 8900"));
         assert!(!updated2.contains("127.0.0.1:8899"));
+
+        let removed = remove_shell_rc_block(&updated2);
+        assert!(!removed.contains(ZASTAVA_RC_START));
+        assert!(!removed.contains(ZASTAVA_RC_END));
+        assert!(removed.contains("export PATH="));
     }
 
     #[test]
@@ -914,6 +1366,98 @@ mod tests {
         assert!(cleanup_claude_code_settings_file(&claude_settings).unwrap());
         let claude_cleaned = fs::read_to_string(&claude_settings).unwrap();
         assert!(!claude_cleaned.contains("127.0.0.1:8899"));
+
+        let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_shell_rc_with_timezone() {
+        let initial = "export PATH=\"$HOME/bin:$PATH\"\n";
+        let updated = upsert_shell_rc_content_with_tz(
+            initial,
+            "http://127.0.0.1:8899",
+            8899,
+            Some("Europe/London"),
+        );
+        assert!(updated.contains("export TZ=\"Europe/London\""));
+        assert!(updated.contains("export LANG=\"en_US.UTF-8\""));
+        assert!(updated.contains("export LC_TIME=\"en_US.UTF-8\""));
+        assert!(updated.contains("export LC_ALL=\"en_US.UTF-8\""));
+        assert!(updated.contains("export HTTPS_PROXY=\"http://127.0.0.1:8899\""));
+    }
+
+    #[test]
+    fn test_powershell_profile_with_timezone() {
+        let initial = "# Custom powershell user settings\nWrite-Host 'Welcome'\n";
+        let updated = upsert_powershell_profile_content_with_tz(
+            initial,
+            "http://127.0.0.1:8899",
+            Some("Europe/Warsaw"),
+        );
+        assert!(updated.contains("$env:HTTP_PROXY = \"http://127.0.0.1:8899\""));
+        assert!(updated.contains("$env:TZ = \"Europe/Warsaw\""));
+        assert!(updated.contains("$env:LANG = \"en_US.UTF-8\""));
+        assert!(updated.contains("$env:LC_TIME = \"en_US.UTF-8\""));
+        assert!(updated.contains(ZASTAVA_RC_START));
+        assert!(updated.contains(ZASTAVA_RC_END));
+
+        // Idempotent upsert replaces block
+        let updated2 = upsert_powershell_profile_content_with_tz(
+            &updated,
+            "http://127.0.0.1:8900",
+            Some("Europe/Berlin"),
+        );
+        assert_eq!(updated2.matches(ZASTAVA_RC_START).count(), 1);
+        assert!(updated2.contains("http://127.0.0.1:8900"));
+        assert!(updated2.contains("Europe/Berlin"));
+        assert!(!updated2.contains("Europe/Warsaw"));
+
+        // Cleanup removes block
+        let cleaned = remove_shell_rc_block(&updated2);
+        assert!(!cleaned.contains(ZASTAVA_RC_START));
+        assert!(!cleaned.contains("Europe/Berlin"));
+        assert!(cleaned.contains("Write-Host 'Welcome'"));
+    }
+
+    #[test]
+    fn test_ide_and_claude_settings_with_tz() {
+        let tmp_dir = std::env::temp_dir().join(format!("zastava_tz_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp_dir);
+        let vscode_settings = tmp_dir.join("settings.json");
+
+        fs::write(&vscode_settings, "{}").unwrap();
+        assert!(apply_ide_settings_file_with_tz(
+            &vscode_settings,
+            "http://127.0.0.1:8899",
+            Some("Europe/Amsterdam")
+        )
+        .unwrap());
+
+        let content = fs::read_to_string(&vscode_settings).unwrap();
+        assert!(content.contains("\"TZ\": \"Europe/Amsterdam\""));
+        assert!(content.contains("\"LANG\": \"en_US.UTF-8\""));
+
+        // Cleanup removes TZ and LANG
+        assert!(cleanup_ide_settings_file(&vscode_settings).unwrap());
+        let cleaned = fs::read_to_string(&vscode_settings).unwrap();
+        assert!(!cleaned.contains("Europe/Amsterdam"));
+        assert!(!cleaned.contains("en_US.UTF-8"));
+
+        // Claude settings
+        let claude_settings = tmp_dir.join(".claude").join("settings.json");
+        assert!(apply_claude_code_settings_file_with_tz(
+            &claude_settings,
+            "http://127.0.0.1:8899",
+            Some("Europe/Helsinki")
+        )
+        .unwrap());
+        let claude_content = fs::read_to_string(&claude_settings).unwrap();
+        assert!(claude_content.contains("\"TZ\": \"Europe/Helsinki\""));
+        assert!(claude_content.contains("\"LANG\": \"en_US.UTF-8\""));
+
+        assert!(cleanup_claude_code_settings_file(&claude_settings).unwrap());
+        let claude_cleaned = fs::read_to_string(&claude_settings).unwrap();
+        assert!(!claude_cleaned.contains("Europe/Helsinki"));
 
         let _ = fs::remove_dir_all(&tmp_dir);
     }

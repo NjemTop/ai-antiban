@@ -1,0 +1,201 @@
+use crate::auditor::geo_matrix::{CheckResult, GUIDE_OS_PRIVACY};
+
+pub const RUSSIAN_TIMEZONES: &[&str] = &[
+    "Europe/Moscow",
+    "Europe/Kaliningrad",
+    "Europe/Kirov",
+    "Europe/Samara",
+    "Europe/Saratov",
+    "Europe/Ulyanovsk",
+    "Europe/Volgograd",
+    "Europe/Astrakhan",
+    "Europe/Minsk",
+    "Asia/Yekaterinburg",
+    "Asia/Omsk",
+    "Asia/Novosibirsk",
+    "Asia/Barnaul",
+    "Asia/Tomsk",
+    "Asia/Novokuznetsk",
+    "Asia/Krasnoyarsk",
+    "Asia/Irkutsk",
+    "Asia/Chita",
+    "Asia/Yakutsk",
+    "Asia/Khandyga",
+    "Asia/Vladivostok",
+    "Asia/Ust-Nera",
+    "Asia/Magadan",
+    "Asia/Sakhalin",
+    "Asia/Srednekolymsk",
+    "Asia/Kamchatka",
+    "Asia/Anadyr",
+];
+
+pub fn is_russian_or_belarusian_timezone(tz: &str) -> bool {
+    RUSSIAN_TIMEZONES.iter().any(|&item| item.eq_ignore_ascii_case(tz))
+}
+
+/// Evaluates whether system timezone exposes user's actual location.
+/// Gate 8: If the OS system timezone mismatches the IP country, but `synced_ai_tz` matches
+/// the exit IP's timezone, CLI and IDE requests are fully protected.
+pub fn evaluate_system_timezone(
+    ip_timezone: Option<&str>,
+    synced_ai_tz: Option<&str>,
+) -> CheckResult {
+    let system_tz = match iana_time_zone::get_timezone() {
+        Ok(tz) => tz,
+        Err(_) => {
+            return CheckResult::ok(
+                "TIMEZONE_UNKNOWN",
+                "Системный часовой пояс не определен.",
+            );
+        }
+    };
+
+    // If synced_ai_tz matches ip_timezone, AI agents in CLI/IDE have TZ and LANG overridden
+    if let (Some(target_tz), Some(synced)) = (ip_timezone, synced_ai_tz) {
+        let t_clean = target_tz.trim();
+        let s_clean = synced.trim();
+        if !t_clean.is_empty() && (s_clean.eq_ignore_ascii_case(t_clean) || s_clean.replace('_', " ") == t_clean.replace('_', " ")) {
+            if system_tz != t_clean {
+                return CheckResult::ok(
+                    "TIMEZONE_SYNCED_AI",
+                    format!(
+                        "Таймзона для ИИ-агентов (CLI/IDE) синхронизирована через Заставу ({t_clean}). Для браузеров рекомендуем также переключить системные часы ОС."
+                    ),
+                );
+            }
+        }
+    }
+
+    // 1. Check if system timezone is in Russia or Belarus
+    if is_russian_or_belarusian_timezone(&system_tz) {
+        return CheckResult::warning(
+            "TIMEZONE_LEAK_RU",
+            format!(
+                "Системный часовой пояс ОС ({system_tz}) указывает на РФ/РБ. Браузеры и десктопный Claude видят эту зону даже через VPN.",
+            ),
+            Some(GUIDE_OS_PRIVACY.to_string()),
+        );
+    }
+
+    // 2. Compare against IP timezone if available
+    if let Some(target_tz) = ip_timezone {
+        let t_clean = target_tz.trim();
+        if !t_clean.is_empty() && system_tz != t_clean {
+            return CheckResult::warning(
+                "TIMEZONE_MISMATCH",
+                format!(
+                    "Часовой пояс ОС ({system_tz}) отличается от таймзоны IP ({t_clean}). Для максимального траста рекомендуется синхронизировать пояс с локацией сервера.",
+                ),
+                Some(GUIDE_OS_PRIVACY.to_string()),
+            );
+        }
+    }
+
+    CheckResult::ok(
+        "TIMEZONE_MATCH",
+        format!("Системный часовой пояс ({system_tz}) совпадает с локацией IP."),
+    )
+}
+
+/// Evaluates Gate 12: Locale & Environment Hygiene (`LANG` and `LC_ALL`).
+/// Checks if host/process environment contains Russian/Belarusian locale indicators
+/// without Zastava's clean `en_US.UTF-8` override.
+pub fn evaluate_locale_env_hygiene(synced_ai_tz: Option<&str>) -> CheckResult {
+    if synced_ai_tz.is_some() {
+        return CheckResult::ok(
+            "LOCALE_HYGIENE_CLEAN",
+            "Окружение CLI/IDE защищено: локаль синхронизирована (en_US.UTF-8) через Заставу.",
+        );
+    }
+
+    let lang = std::env::var("LANG").unwrap_or_default();
+    let lc_all = std::env::var("LC_ALL").unwrap_or_default();
+
+    let is_sanctioned = |val: &str| {
+        let v = val.to_ascii_uppercase();
+        v.contains("RU_RU") || v.contains("BE_BY") || v.starts_with("RU-") || v.starts_with("BE-")
+    };
+
+    if is_sanctioned(&lang) || is_sanctioned(&lc_all) {
+        let bad_val = if is_sanctioned(&lang) { lang } else { lc_all };
+        return CheckResult::warning(
+            "LOCALE_ENV_SANCTIONED_MARKER",
+            format!(
+                "В окружении обнаружена локаль «{bad_val}». ИИ-агенты в терминале могут передавать этот заголовок. Нажмите «Авто-настройка TZ/локали» для безопасной синхронизации (en_US.UTF-8)."
+            ),
+            Some(GUIDE_OS_PRIVACY.to_string()),
+        );
+    }
+
+    CheckResult::ok(
+        "LOCALE_HYGIENE_CLEAN",
+        "Переменные окружения LANG/LC_ALL не содержат маркеров риска.",
+    )
+}
+
+/// Checks OS Location Services status (BSSID Wi-Fi triangulation).
+pub fn check_os_location_services() -> CheckResult {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location",
+                "/v",
+                "Value",
+            ])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&output.stdout);
+            if text.contains("Allow") {
+                return CheckResult::warning(
+                    "OS_LOCATION_ENABLED",
+                    "Службы геолокации Windows активны. Отключите их в настройках конфиденциальности ОС.",
+                    Some(GUIDE_OS_PRIVACY.to_string()),
+                );
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // On macOS CoreLocation queries BSSIDs in the background
+    }
+
+    CheckResult::ok(
+        "OS_LOCATION_SAFE",
+        "Службы геолокации ОС не передают локальные Wi-Fi BSSID.",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_russian_timezone_detection() {
+        assert!(is_russian_or_belarusian_timezone("Europe/Moscow"));
+        assert!(is_russian_or_belarusian_timezone("europe/moscow"));
+        assert!(is_russian_or_belarusian_timezone("Asia/Vladivostok"));
+        assert!(is_russian_or_belarusian_timezone("Europe/Minsk"));
+        assert!(!is_russian_or_belarusian_timezone("Europe/Amsterdam"));
+        assert!(!is_russian_or_belarusian_timezone("America/New_York"));
+    }
+
+    #[test]
+    fn test_timezone_evaluation_synced_ai_bypass() {
+        // If synced_ai_tz matches IP timezone, it returns OK even if OS timezone is different
+        let res = evaluate_system_timezone(Some("Europe/Amsterdam"), Some("Europe/Amsterdam"));
+        assert_eq!(res.status, crate::auditor::geo_matrix::CheckStatus::Ok);
+        assert!(res.code == "TIMEZONE_SYNCED_AI" || res.code == "TIMEZONE_MATCH");
+    }
+
+    #[test]
+    fn test_locale_hygiene_evaluation() {
+        // When synced_ai_tz is active, locale hygiene is always OK
+        let res_synced = evaluate_locale_env_hygiene(Some("Europe/London"));
+        assert_eq!(res_synced.status, crate::auditor::geo_matrix::CheckStatus::Ok);
+        assert_eq!(res_synced.code, "LOCALE_HYGIENE_CLEAN");
+    }
+}

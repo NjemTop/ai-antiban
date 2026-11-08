@@ -5,9 +5,20 @@
     <link rel="icon" type="image/png" href="/icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Застава — Сетевой шлюз для безопасной работы с ИИ</title>
+    <script>
+      (function() {
+        try {
+          var p = new URLSearchParams(window.location.search);
+          var w = p.get('window');
+          if (w === 'alert-popup' || w === 'alert' || window.location.hash.indexOf('alert') !== -1) {
+            document.documentElement.classList.add('is-alert-popup');
+          }
+        } catch (_) {}
+      })();
+    </script>
   </head>
 
-  <body class="bg-[#0A0B0E] text-zinc-100 antialiased selection:bg-emerald-500/20 selection:text-emerald-300">
+  <body class="text-zinc-100 antialiased selection:bg-emerald-500/20 selection:text-emerald-300">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

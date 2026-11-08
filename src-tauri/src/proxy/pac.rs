@@ -16,6 +16,18 @@ pub const DEFAULT_AI_DOMAINS: &[&str] = &[
     "aiplatform.googleapis.com",
     "cloudaicompanion.googleapis.com",
     "alkalimakersuite-pa.clients6.google.com",
+    "daily-cloudcode-pa.googleapis.com",
+    "cloudcode-pa.googleapis.com",
+    "daily-cloudcode-pa.sandbox.googleapis.com",
+    "autopush-cloudcode-pa.sandbox.googleapis.com",
+    "preprod-daily-cloudcode-pa.sandbox.googleapis.com",
+    "aicode.googleapis.com",
+    "autopush-aicode.sandbox.googleapis.com",
+    "preprod-aicode.sandbox.googleapis.com",
+    "alkalimakersuiteapplets.pa.googleapis.com",
+    "antigravity.google",
+    "antigravity.google.com",
+    "share.gemini.google",
 ];
 
 /// Collects all configured AI domains from the matrix.

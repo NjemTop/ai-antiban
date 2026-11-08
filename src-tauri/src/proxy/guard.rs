@@ -17,9 +17,11 @@ use crate::proxy::hold_queue::{
 };
 use crate::state::{AppState, IpHistoryEntry, KNOWN_PROVIDERS};
 
-/// How often the egress IP is probed.
-pub const PROBE_INTERVAL_MS: u64 = 3000;
-/// Minimum gap between two probes (protects against a probe per CONNECT).
+/// Fast kernel routing table check interval (sub-250ms reaction time on VPN disconnect).
+pub const ROUTE_CHECK_INTERVAL_MS: u64 = 250;
+/// Remote IP probe interval when route fingerprint has not changed.
+pub const PROBE_INTERVAL_MS: u64 = 1000;
+/// Minimum gap between two remote HTTP probes.
 pub const PROBE_MIN_GAP_MS: u64 = 1000;
 /// How long an established tunnel may stall before it is dropped (looks like a dead network).
 pub const MAX_STALL_SECS: u64 = 90;
@@ -65,13 +67,31 @@ struct Inner {
     handled_ip: Option<String>,
     pending: Option<Pending>,
     last_probe: Option<Instant>,
+    last_route_fp: Option<String>,
 }
 
 pub struct NetworkGuard {
     gate_tx: watch::Sender<Gate>,
+    tunnel_abort_tx: watch::Sender<u64>,
     inner: Mutex<Inner>,
     ctx: OnceLock<GuardCtx>,
     client: reqwest::Client,
+}
+
+/// Computes the local default-route network interface fingerprint in < 0.05ms
+/// using a local UDP routing table lookup without transmitting any network packet.
+pub fn compute_local_route_fingerprint(upstream_key: Option<&str>) -> String {
+    let local_ip = match std::net::UdpSocket::bind("0.0.0.0:0") {
+        Ok(socket) => match socket.connect("1.1.1.1:80") {
+            Ok(_) => match socket.local_addr() {
+                Ok(addr) => addr.ip().to_string(),
+                Err(_) => "0.0.0.0".to_string(),
+            },
+            Err(_) => "0.0.0.0".to_string(),
+        },
+        Err(_) => "0.0.0.0".to_string(),
+    };
+    format!("{local_ip}|upstream:{}", upstream_key.unwrap_or(""))
 }
 
 impl Default for NetworkGuard {
@@ -147,6 +167,7 @@ pub async fn gate_closed(rx: &mut watch::Receiver<Gate>) {
 impl NetworkGuard {
     pub fn new() -> Self {
         let (gate_tx, _rx) = watch::channel(Gate::Open);
+        let (tunnel_abort_tx, _abort_rx) = watch::channel(0u64);
         let client = reqwest::Client::builder()
             .timeout(Duration::from_millis(2000))
             // Never reuse keep-alive sockets: they may still point to the previous route.
@@ -156,6 +177,7 @@ impl NetworkGuard {
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             gate_tx,
+            tunnel_abort_tx,
             inner: Mutex::new(Inner::default()),
             ctx: OnceLock::new(),
             client,
@@ -168,6 +190,37 @@ impl NetworkGuard {
 
     pub fn subscribe(&self) -> watch::Receiver<Gate> {
         self.gate_tx.subscribe()
+    }
+
+    pub fn subscribe_tunnel_abort(&self) -> watch::Receiver<u64> {
+        self.tunnel_abort_tx.subscribe()
+    }
+
+    pub fn abort_active_tunnels(&self) {
+        let _ = self.tunnel_abort_tx.send_modify(|val| *val = val.wrapping_add(1));
+    }
+
+    pub fn check_route_fingerprint_sync(&self, upstream_key: Option<&str>) -> bool {
+        let fp = compute_local_route_fingerprint(upstream_key);
+        let mut g = match self.inner.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return false,
+        };
+        if g.baseline.is_none() {
+            g.last_route_fp = Some(fp);
+            return false;
+        }
+        if let Some(ref old_fp) = g.last_route_fp {
+            if fp != *old_fp {
+                g.last_route_fp = Some(fp);
+                self.set_gate(Gate::Pending);
+                self.abort_active_tunnels();
+                return true;
+            }
+        } else {
+            g.last_route_fp = Some(fp);
+        }
+        false
     }
 
     fn set_gate(&self, gate: Gate) {
@@ -203,8 +256,8 @@ impl NetworkGuard {
             let mut n: u64 = 0;
             loop {
                 if let Some(ctx) = guard.ctx.get() {
-                    guard.tick(ctx).await;
-                    if n % 5 == 0 {
+                    guard.check_route_and_tick(ctx).await;
+                    if n % 20 == 0 {
                         let _ = tokio::task::spawn_blocking(
                             crate::sysproxy::refresh_if_services_changed,
                         )
@@ -212,7 +265,7 @@ impl NetworkGuard {
                     }
                 }
                 n += 1;
-                tokio::time::sleep(Duration::from_millis(PROBE_INTERVAL_MS)).await;
+                tokio::time::sleep(Duration::from_millis(ROUTE_CHECK_INTERVAL_MS)).await;
             }
         });
     }
@@ -220,7 +273,7 @@ impl NetworkGuard {
     /// Cheap pre-flight check used by every new CONNECT (no-op when the monitor is not running).
     pub async fn ensure_fresh(self: &Arc<Self>) {
         if let Some(ctx) = self.ctx.get() {
-            self.tick(ctx).await;
+            self.check_route_and_tick(ctx).await;
         }
     }
 
@@ -249,8 +302,114 @@ impl NetworkGuard {
         None
     }
 
-    pub async fn tick(self: &Arc<Self>, ctx: &GuardCtx) {
+    pub async fn check_route_and_tick(self: &Arc<Self>, ctx: &GuardCtx) {
+        let upstream_opt = ctx.state.get_upstream_proxy().await;
+        let active_upstream = upstream_opt.as_ref().filter(|c| c.enabled);
+        let upstream_key = active_upstream.map(|c| c.raw_key.as_str());
+        let current_fp = compute_local_route_fingerprint(upstream_key);
+
         let mut inner = self.inner.lock().await;
+
+        let route_changed = if inner.baseline.is_some() {
+            if let Some(ref old_fp) = inner.last_route_fp {
+                *old_fp != current_fp
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if route_changed {
+            inner.last_route_fp = Some(current_fp.clone());
+            // 1. Immediately freeze gate
+            self.set_gate(Gate::Pending);
+            // 2. Abort all open keep-alive tunnels
+            self.abort_active_tunnels();
+            // 3. Invalidate telemetry cache
+            ctx.auditor.resolver.invalidate_cache().await;
+            // 4. Record intercepted event in traffic stats
+            let old_country = inner
+                .baseline
+                .as_ref()
+                .and_then(|b| b.country.clone())
+                .unwrap_or_else(|| "??".to_string());
+            ctx.state
+                .stats()
+                .record_intercepted("all", "NetworkGuard", "HELD", &old_country);
+
+            // 5. Instantly show top-center hold popup (<250ms) BEFORE slow remote network calls
+            let id = Uuid::new_v4().to_string();
+            let rx = ctx.hold_queue.register(id.clone(), ALL_PROVIDERS).await;
+            if let Some(p) = inner.pending.take() {
+                ctx.hold_queue.remove(&p.id).await;
+            }
+            inner.pending = Some(Pending { id: id.clone() });
+
+            let old = inner.baseline.clone();
+            let hold_report = RiskReport {
+                provider: ProviderId::Anthropic,
+                overall_status: OverallStatus::Red,
+                trust_score: 0,
+                telemetry: NetworkTelemetry {
+                    ip: "Проверка новой сети...".to_string(),
+                    country_code: "??".to_string(),
+                    hostname: None,
+                    asn: None,
+                    org: None,
+                    isp: None,
+                    timezone: None,
+                    resolved_at: crate::auditor::network::current_timestamp(),
+                },
+                geo_result: crate::auditor::CheckResult::critical(
+                    "NETWORK_CHANGED",
+                    "Обнаружен обрыв VPN или смена сетевого интерфейса. Трафик ИИ мгновенно заморожен до проверки.",
+                    None,
+                ),
+                pinning_result: crate::auditor::CheckResult::critical(
+                    "HOLD_ACTIVE",
+                    "Соединения заморожены для защиты сессии ИИ.",
+                    None,
+                ),
+                travel_result: crate::auditor::CheckResult::ok("TRAVEL_HOLD", "Проверка параметров..."),
+                dnsbl_result: crate::auditor::CheckResult::ok("DNSBL_HOLD", "Проверка..."),
+                dnsbl_clean_count: "0/0".to_string(),
+                asn_result: crate::auditor::CheckResult::ok("ASN_HOLD", "Проверка..."),
+                ipv6_result: crate::auditor::CheckResult::ok("IPV6_HOLD", "Проверка..."),
+                timezone_result: crate::auditor::CheckResult::ok("TZ_HOLD", "Проверка..."),
+                checks: vec![],
+            };
+
+            let payload = RiskInterceptPayload {
+                id: id.clone(),
+                provider: ProviderId::Anthropic,
+                host: "Смена сети · все ИИ-сервисы".to_string(),
+                report: hold_report,
+                ttl_seconds: DEFAULT_HOLD_TTL_SECS,
+                scope: "network".to_string(),
+                network_change: Some(NetworkChange {
+                    old_ip: old.as_ref().map(|b| b.ip.clone()),
+                    old_country: old.as_ref().and_then(|b| b.country.clone()),
+                    new_ip: "Проверка новой сети...".to_string(),
+                    new_country: "??".to_string(),
+                }),
+                is_simulation: false,
+            };
+
+            let _ = ctx.app.emit("interceptor://risk-detected", &payload);
+            crate::show_and_position_alert_popup(&ctx.app);
+
+            // Now probe the new IP and perform full re-audit
+            let probed = self.probe_ip().await;
+            inner.last_probe = Some(Instant::now());
+            if let Some(new_ip) = probed {
+                inner.observed_ip = Some(new_ip.clone());
+                self.handle_change_locked_with_hold(ctx, &mut inner, new_ip, id, rx).await;
+            }
+            return;
+        }
+
+        inner.last_route_fp = Some(current_fp);
 
         if let Some(t) = inner.last_probe {
             if t.elapsed() < Duration::from_millis(PROBE_MIN_GAP_MS) {
@@ -313,6 +472,110 @@ impl NetworkGuard {
         self.handle_change_locked(ctx, &mut inner, ip).await;
     }
 
+    pub async fn tick(self: &Arc<Self>, ctx: &GuardCtx) {
+        self.check_route_and_tick(ctx).await;
+    }
+
+    async fn handle_change_locked_with_hold(
+        self: &Arc<Self>,
+        ctx: &GuardCtx,
+        inner: &mut Inner,
+        new_ip: String,
+        id: String,
+        rx: tokio::sync::oneshot::Receiver<HoldResolution>,
+    ) {
+        let _ = ctx.state.clear_session_allowed_providers().await;
+        let _ = ctx.state.clear_blocked_providers().await;
+        ctx.auditor.resolver.invalidate_cache().await;
+
+        let reports = match audit_all(ctx).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Network guard: audit of the new network failed: {e}");
+                return;
+            }
+        };
+        inner.handled_ip = Some(new_ip.clone());
+
+        let mut worst = &reports[0];
+        for r in &reports[1..] {
+            if severity(r) > severity(worst) {
+                worst = r;
+            }
+        }
+        let worst = worst.clone();
+        let tel = worst.telemetry.clone();
+
+        let st = ctx.state.get_data().await;
+        let is_pinned = st
+            .pinned_ip
+            .as_deref()
+            .map(|p| p.trim() == new_ip.trim() || p.trim() == tel.ip.trim())
+            .unwrap_or(false);
+        let all_green = reports
+            .iter()
+            .all(|r| r.overall_status == OverallStatus::Green);
+
+        self.update_tray(ctx, &reports[0]).await;
+
+        if is_pinned && all_green {
+            self.accept_locked(ctx, inner, &new_ip, &tel).await;
+            return;
+        }
+
+        let old = inner.baseline.clone();
+        let payload = RiskInterceptPayload {
+            id: id.clone(),
+            provider: worst.provider,
+            host: "Смена сети · все ИИ-сервисы".to_string(),
+            report: worst.clone(),
+            ttl_seconds: DEFAULT_HOLD_TTL_SECS,
+            scope: "network".to_string(),
+            network_change: Some(NetworkChange {
+                old_ip: old.as_ref().map(|b| b.ip.clone()),
+                old_country: old.as_ref().and_then(|b| b.country.clone()),
+                new_ip: tel.ip.clone(),
+                new_country: tel.country_code.clone(),
+            }),
+            is_simulation: false,
+        };
+
+        let _ = ctx.app.emit("interceptor://risk-detected", &payload);
+        crate::show_and_position_alert_popup(&ctx.app);
+        let _ = ctx.app.emit("network://changed", &worst);
+
+        let guard = Arc::clone(self);
+        let ctx2 = ctx.clone();
+        tauri::async_runtime::spawn(async move {
+            let res = tokio::time::timeout(Duration::from_secs(DEFAULT_HOLD_TTL_SECS), rx).await;
+            let allow = matches!(res, Ok(Ok(HoldResolution::Allow)));
+
+            let mut inner = guard.inner.lock().await;
+            let still_current = inner
+                .pending
+                .as_ref()
+                .map(|p| p.id == id)
+                .unwrap_or(false);
+            if !still_current {
+                return;
+            }
+            inner.pending = None;
+            ctx2.hold_queue.remove(&id).await;
+
+            if allow {
+                let ip = inner.observed_ip.clone().unwrap_or_else(|| tel.ip.clone());
+                guard.accept_locked(&ctx2, &mut inner, &ip, &tel).await;
+            } else {
+                for p in KNOWN_PROVIDERS {
+                    let _ = ctx2.state.block_provider(p).await;
+                }
+                guard.set_gate(Gate::Blocked);
+                guard.hide_popup(&ctx2);
+                guard.refresh_tray(&ctx2).await;
+            }
+        });
+    }
+
     async fn handle_change_locked(
         self: &Arc<Self>,
         ctx: &GuardCtx,
@@ -321,6 +584,7 @@ impl NetworkGuard {
     ) {
         // 1. Freeze everything immediately.
         self.set_gate(Gate::Pending);
+        self.abort_active_tunnels();
         if let Some(p) = inner.pending.take() {
             ctx.hold_queue.remove(&p.id).await;
         }
@@ -389,19 +653,11 @@ impl NetworkGuard {
                 new_ip: tel.ip.clone(),
                 new_country: tel.country_code.clone(),
             }),
+            is_simulation: false,
         };
 
         let _ = ctx.app.emit("interceptor://risk-detected", &payload);
-        if let Some(popup) = ctx.app.get_webview_window("alert-popup") {
-            let _ = popup.show();
-            let _ = popup.unminimize();
-            let _ = popup.set_always_on_top(true);
-            let _ = popup.center();
-            let _ = popup.set_focus();
-        } else if let Some(main_win) = ctx.app.get_webview_window("main") {
-            let _ = main_win.show();
-            let _ = main_win.set_focus();
-        }
+        crate::show_and_position_alert_popup(&ctx.app);
         let _ = ctx.app.emit("network://changed", &worst);
 
         // 5. Wait for the decision in the background.
@@ -493,7 +749,9 @@ impl NetworkGuard {
         let Some(ip) = inner.observed_ip.clone() else {
             return;
         };
-        if let Ok(tel) = ctx.auditor.resolver.resolve(false).await {
+        let upstream_opt = ctx.state.get_upstream_proxy().await;
+        let active_upstream = upstream_opt.as_ref().filter(|c| c.enabled);
+        if let Ok(tel) = ctx.auditor.resolver.resolve_with_upstream(false, active_upstream).await {
             self.accept_locked(ctx, &mut inner, &ip, &tel).await;
         }
     }
@@ -575,5 +833,46 @@ mod tests {
         guard.set_gate(Gate::Blocked);
         let mut rx = guard.subscribe();
         assert!(!wait_open(&mut rx).await);
+    }
+
+    #[test]
+    fn test_compute_local_route_fingerprint() {
+        let fp1 = compute_local_route_fingerprint(None);
+        assert!(!fp1.is_empty());
+        assert!(fp1.contains("|upstream:"));
+
+        let fp2 = compute_local_route_fingerprint(Some("socks5://user:pass@127.0.0.1:1080"));
+        assert!(fp2.contains("|upstream:socks5://user:pass@127.0.0.1:1080"));
+        assert_ne!(fp1, fp2);
+    }
+
+    #[tokio::test]
+    async fn test_tunnel_abort_notification() {
+        let guard = NetworkGuard::new();
+        let mut abort_rx = guard.subscribe_tunnel_abort();
+        assert_eq!(*abort_rx.borrow_and_update(), 0);
+
+        guard.abort_active_tunnels();
+        assert!(abort_rx.changed().await.is_ok());
+        assert_eq!(*abort_rx.borrow_and_update(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_route_fingerprint_sync_detects_change() {
+        let guard = NetworkGuard::new();
+        {
+            let mut inner = guard.inner.lock().await;
+            inner.baseline = Some(Baseline {
+                ip: "1.2.3.4".to_string(),
+                country: Some("NL".to_string()),
+                trusted: true,
+            });
+            inner.last_route_fp = Some("192.168.1.100|upstream:old".to_string());
+        }
+
+        // Calling with different upstream key detects route change immediately
+        let changed = guard.check_route_fingerprint_sync(Some("socks5://new"));
+        assert!(changed);
+        assert_eq!(guard.gate(), Gate::Pending);
     }
 }

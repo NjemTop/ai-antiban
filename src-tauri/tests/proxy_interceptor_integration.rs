@@ -86,6 +86,7 @@ async fn test_connect_hold_and_block() {
     let dangerous_telemetry = NetworkTelemetry {
         ip: "185.220.101.5".to_string(),
         country_code: "TR".to_string(),
+        hostname: None,
         asn: Some(9009),
         org: Some("M247 Europe SRL".to_string()),
         isp: Some("M247 Europe SRL".to_string()),
@@ -186,6 +187,7 @@ async fn test_connect_hold_and_allow_session() {
     let dangerous_telemetry = NetworkTelemetry {
         ip: "185.220.101.5".to_string(),
         country_code: "TR".to_string(),
+        hostname: None,
         asn: Some(9009),
         org: Some("M247 Europe SRL".to_string()),
         isp: Some("M247 Europe SRL".to_string()),
@@ -276,4 +278,116 @@ fn test_graceful_proxy_cleanup() {
         !SysProxy::is_active(),
         "SysProxy must report inactive after disable"
     );
+}
+
+/// Integration Test 5: Upstream Gateway Selective Routing
+/// Spec: When UpstreamProxyConfig is enabled, CONNECT to AI domain (api.anthropic.com:443)
+/// is routed through the upstream proxy tunnel.
+#[tokio::test]
+async fn test_upstream_proxy_selective_routing() {
+    use zastava_lib::state::UpstreamProxyConfig;
+
+    // 1. Start mock SOCKS5 upstream server
+    let mock_socks = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let socks_addr = mock_socks.local_addr().unwrap();
+
+    let mock_socks_handle = tokio::spawn(async move {
+        let (mut socket, _) = mock_socks.accept().await.unwrap();
+        // Handshake
+        let mut greeting = [0u8; 3];
+        socket.read_exact(&mut greeting).await.unwrap();
+        socket.write_all(&[0x05, 0x00]).await.unwrap();
+
+        // Connect request
+        let mut req_head = [0u8; 4];
+        socket.read_exact(&mut req_head).await.unwrap();
+        let mut dlen = [0u8; 1];
+        socket.read_exact(&mut dlen).await.unwrap();
+        let mut domain = vec![0u8; dlen[0] as usize];
+        socket.read_exact(&mut domain).await.unwrap();
+        let mut port_bytes = [0u8; 2];
+        socket.read_exact(&mut port_bytes).await.unwrap();
+
+        assert_eq!(String::from_utf8_lossy(&domain), "api.anthropic.com");
+        assert_eq!(u16::from_be_bytes(port_bytes), 443);
+
+        // Success reply
+        socket
+            .write_all(&[0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 1, 187])
+            .await
+            .unwrap();
+
+        // Relay echo
+        let mut buf = [0u8; 16];
+        let n = socket.read(&mut buf).await.unwrap();
+        socket.write_all(&buf[..n]).await.unwrap();
+    });
+
+    let auditor = Auditor::new().expect("Auditor initialization failed");
+    let clean_telemetry = NetworkTelemetry {
+        ip: "185.10.10.1".to_string(),
+        country_code: "NL".to_string(),
+        hostname: None,
+        asn: Some(20473),
+        org: Some("Choopa".to_string()),
+        isp: Some("Choopa".to_string()),
+        timezone: Some("Europe/Amsterdam".to_string()),
+        resolved_at: current_timestamp(),
+    };
+
+    let raw_key = format!("socks5://127.0.0.1:{}", socks_addr.port());
+    auditor
+        .resolver
+        .set_cached_for_key(Some(raw_key.clone()), clean_telemetry)
+        .await;
+
+    let state = AppState::new_in_memory();
+    let cfg = UpstreamProxyConfig {
+        enabled: true,
+        raw_key,
+        protocol: "socks5".to_string(),
+        host: "127.0.0.1".to_string(),
+        port: socks_addr.port(),
+        username: None,
+        password: None,
+        label: Some("Mock NL Gateway".to_string()),
+    };
+    state.set_upstream_proxy(Some(cfg)).await.unwrap();
+    state.allow_provider_for_session("anthropic").await.unwrap();
+
+    let hold_queue = Arc::new(HoldQueue::new());
+    let server = Arc::new(
+        ProxyServer::bind_ephemeral(auditor, state, hold_queue, None)
+            .await
+            .expect("bind ephemeral failed"),
+    );
+    let bound_addr = server.bound_addr;
+    let srv_clone = Arc::clone(&server);
+    let srv_handle = tokio::spawn(async move {
+        srv_clone.run().await;
+    });
+
+    let mut client = TcpStream::connect(bound_addr).await.unwrap();
+    let connect_req = "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n";
+    client.write_all(connect_req.as_bytes()).await.unwrap();
+    client.flush().await.unwrap();
+
+    let mut resp_buf = [0u8; 256];
+    let n = client.read(&mut resp_buf).await.unwrap();
+    let resp_str = String::from_utf8_lossy(&resp_buf[..n]);
+    assert!(
+        resp_str.contains("HTTP/1.1 200 Connection Established"),
+        "Expected 200 Connection Established, got: {resp_str}"
+    );
+
+    // Verify data passed through the mock socks5 gateway
+    client.write_all(b"TEST_PROXY_FLOW").await.unwrap();
+    client.flush().await.unwrap();
+
+    let mut echo = [0u8; 15];
+    client.read_exact(&mut echo).await.unwrap();
+    assert_eq!(&echo, b"TEST_PROXY_FLOW");
+
+    srv_handle.abort();
+    mock_socks_handle.abort();
 }

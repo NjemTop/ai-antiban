@@ -20,6 +20,37 @@ const TRAY_ICON_GREEN: &[u8] = include_bytes!("../icons/tray-green.png");
 const TRAY_ICON_YELLOW: &[u8] = include_bytes!("../icons/tray-yellow.png");
 const TRAY_ICON_RED: &[u8] = include_bytes!("../icons/tray-red.png");
 
+/// Positions the alert-popup window directly under the notch / top-center of the screen
+/// and brings it to front with focus.
+pub fn show_and_position_alert_popup(app: &tauri::AppHandle) {
+    if let Some(popup) = app.get_webview_window("alert-popup") {
+        let _ = popup.set_shadow(false);
+        let _ = popup.set_decorations(false);
+        if let Ok(Some(monitor)) = popup.primary_monitor() {
+            let scale = monitor.scale_factor();
+            let mon_size = monitor.size();
+            let win_width = 440.0;
+            let mon_width = mon_size.width as f64 / scale;
+            let x = ((mon_width - win_width) / 2.0).max(0.0);
+            let y = 0.0;
+            let _ = popup.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(x, y)));
+        }
+        let _ = popup.show();
+        let _ = popup.unminimize();
+        let _ = popup.set_always_on_top(true);
+        let _ = popup.set_focus();
+    } else if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.show();
+        let _ = main_win.set_focus();
+    }
+}
+
+/// Checks whether a country code is sanctioned/high-risk and must NEVER be auto-pinned as AI timezone.
+pub fn is_sanctioned_or_blocked_country(country_code: &str) -> bool {
+    const BLOCKED: &[&str] = &["RU", "BY", "IR", "KP", "SY", "CU"];
+    BLOCKED.iter().any(|c| c.eq_ignore_ascii_case(country_code.trim()))
+}
+
 /// Updates the system tray icon, menu bar title (macOS), and tooltip based on current audit report.
 pub fn update_tray_from_report(
     app: &tauri::AppHandle,
@@ -29,30 +60,33 @@ pub fn update_tray_from_report(
 ) {
     if let Some(tray) = app.tray_by_id(MAIN_TRAY_ID) {
         let country = &report.telemetry.country_code;
-        let score = report.trust_score;
 
         let (icon_bytes, status_label, dot) = if has_blocked {
-            (TRAY_ICON_RED, format!(" {country} · ПАУЗА"), "🔴")
+            (TRAY_ICON_RED, " ⛔ СТОП СЕТИ".to_string(), "🔴")
         } else {
             match report.overall_status {
                 auditor::OverallStatus::Green => {
                     let pin_mark = if is_pinned { " 📌" } else { "" };
-                    (TRAY_ICON_GREEN, format!(" {country} · {score}%{pin_mark}"), "🟢")
+                    (TRAY_ICON_GREEN, format!(" Защита · {country}{pin_mark}"), "🟢")
                 }
                 auditor::OverallStatus::Yellow => {
-                    (TRAY_ICON_YELLOW, format!(" {country} · РИСК"), "🟡")
+                    (TRAY_ICON_YELLOW, format!(" Риск · {country}"), "🟡")
                 }
                 auditor::OverallStatus::Red => {
-                    (TRAY_ICON_RED, format!(" {country} · БЛОК"), "🔴")
+                    (TRAY_ICON_RED, " ⛔ СТОП СЕТИ".to_string(), "🔴")
                 }
             }
         };
 
         let _ = tray.set_title(Some(&status_label));
 
+        let stats = app
+            .try_state::<state::AppState>()
+            .map(|s| s.stats().snapshot_sync())
+            .unwrap_or_default();
         let tooltip = format!(
-            "Zastava {dot} IP: {} ({}) · Траст: {}% · DNSBL: {}",
-            report.telemetry.ip, country, score, report.dnsbl_clean_count
+            "Zastava {dot} IP: {} ({}) · Защищено ИИ: {} · Отбито утечек: {}",
+            report.telemetry.ip, country, stats.protected_ai_requests, stats.intercepted_leaks
         );
         let _ = tray.set_tooltip(Some(&tooltip));
 
@@ -113,6 +147,18 @@ async fn clean_app_cache(
 }
 
 #[tauri::command]
+fn scan_claude_data_cmd() -> Result<auditor::claude_exporter::ClaudeLocalDataSummary, String> {
+    Ok(auditor::claude_exporter::scan_claude_local_data())
+}
+
+#[tauri::command]
+async fn export_claude_data_cmd() -> Result<auditor::claude_exporter::ClaudeExportResult, String> {
+    tokio::task::spawn_blocking(auditor::claude_exporter::export_claude_local_data)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn pin_current_ip(
     ip: String,
     state: tauri::State<'_, state::AppState>,
@@ -153,7 +199,9 @@ async fn allow_provider_session(
 
     // Record current IP in history so Impossible Travel is acknowledged and cleared
     if let Some(provider_id) = auditor::ProviderId::from_id(&provider) {
-        if let Ok(tel) = auditor.resolver.resolve(false).await {
+        let upstream_opt = state.get_upstream_proxy().await;
+        let active_upstream = upstream_opt.as_ref().filter(|c| c.enabled);
+        if let Ok(tel) = auditor.resolver.resolve_with_upstream(false, active_upstream).await {
             let entry = state::IpHistoryEntry::new(
                 tel.ip,
                 tel.country_code,
@@ -188,7 +236,9 @@ async fn unblock_provider_cmd(
 
     // Also update IP history to current IP so a stale Impossible Travel doesn't immediately re-flag
     if let Some(provider_id) = auditor::ProviderId::from_id(&provider) {
-        if let Ok(tel) = auditor.resolver.resolve(false).await {
+        let upstream_opt = state.get_upstream_proxy().await;
+        let active_upstream = upstream_opt.as_ref().filter(|c| c.enabled);
+        if let Ok(tel) = auditor.resolver.resolve_with_upstream(false, active_upstream).await {
             let entry = state::IpHistoryEntry::new(
                 tel.ip,
                 tel.country_code,
@@ -213,6 +263,27 @@ async fn resolve_interception(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let is_simulation = scope.as_deref() == Some("simulation") || id.starts_with("sim-");
+    if is_simulation {
+        let resolution = match action {
+            proxy::InterceptionAction::AllowSession => proxy::HoldResolution::Allow,
+            proxy::InterceptionAction::BlockUntilNetworkChange
+            | proxy::InterceptionAction::OpenGuideAndBlock => proxy::HoldResolution::Block,
+        };
+        proxy_manager.hold_queue.resolve(&id, resolution).await;
+        if matches!(action, proxy::InterceptionAction::OpenGuideAndBlock) {
+            if let Some(main_win) = app.get_webview_window("main") {
+                let _ = main_win.show();
+                let _ = main_win.set_focus();
+                let _ = app.emit("interceptor://open-guide", "01-personal-vpn-15min");
+            }
+        }
+        if let Some(popup) = app.get_webview_window("alert-popup") {
+            let _ = popup.hide();
+        }
+        let _ = app.emit("interceptor://resolved", "");
+        return Ok(());
+    }
+
     // `all` or scope "network" = network-wide hold created by the network guard after a sudden IP change
     let is_network_scope = scope.as_deref() == Some("network") || provider == proxy::ALL_PROVIDERS;
     let targets: Vec<String> = if is_network_scope {
@@ -223,66 +294,54 @@ async fn resolve_interception(
 
     match action {
         proxy::InterceptionAction::AllowSession => {
-            if !is_simulation {
-                for p in &targets {
-                    state
-                        .allow_provider_for_session(p)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                }
+            for p in &targets {
+                state
+                    .allow_provider_for_session(p)
+                    .await
+                    .map_err(|e| e.to_string())?;
             }
             proxy_manager
                 .hold_queue
                 .resolve(&id, proxy::HoldResolution::Allow)
                 .await;
-            if !is_simulation {
-                for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
-                    proxy_manager
-                        .hold_queue
-                        .resolve_all_for_provider(p, proxy::HoldResolution::Allow)
-                        .await;
-                }
-                if is_network_scope {
-                    proxy_manager.guard.accept_current().await;
-                }
+            for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
+                proxy_manager
+                    .hold_queue
+                    .resolve_all_for_provider(p, proxy::HoldResolution::Allow)
+                    .await;
+            }
+            if is_network_scope {
+                proxy_manager.guard.accept_current().await;
             }
         }
         proxy::InterceptionAction::BlockUntilNetworkChange => {
-            if !is_simulation {
-                for p in &targets {
-                    state.block_provider(p).await.map_err(|e| e.to_string())?;
-                }
+            for p in &targets {
+                state.block_provider(p).await.map_err(|e| e.to_string())?;
             }
             proxy_manager
                 .hold_queue
                 .resolve(&id, proxy::HoldResolution::Block)
                 .await;
-            if !is_simulation {
-                for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
-                    proxy_manager
-                        .hold_queue
-                        .resolve_all_for_provider(p, proxy::HoldResolution::Block)
-                        .await;
-                }
+            for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
+                proxy_manager
+                    .hold_queue
+                    .resolve_all_for_provider(p, proxy::HoldResolution::Block)
+                    .await;
             }
         }
         proxy::InterceptionAction::OpenGuideAndBlock => {
-            if !is_simulation {
-                for p in &targets {
-                    state.block_provider(p).await.map_err(|e| e.to_string())?;
-                }
+            for p in &targets {
+                state.block_provider(p).await.map_err(|e| e.to_string())?;
             }
             proxy_manager
                 .hold_queue
                 .resolve(&id, proxy::HoldResolution::Block)
                 .await;
-            if !is_simulation {
-                for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
-                    proxy_manager
-                        .hold_queue
-                        .resolve_all_for_provider(p, proxy::HoldResolution::Block)
-                        .await;
-                }
+            for p in targets.iter().map(String::as_str).chain([proxy::ALL_PROVIDERS]) {
+                proxy_manager
+                    .hold_queue
+                    .resolve_all_for_provider(p, proxy::HoldResolution::Block)
+                    .await;
             }
             if let Some(main_win) = app.get_webview_window("main") {
                 let _ = main_win.show();
@@ -316,6 +375,7 @@ async fn simulate_interception(
     let telemetry = auditor::NetworkTelemetry {
         ip: "185.220.101.5".to_string(),
         country_code: "TR".to_string(),
+        hostname: Some("tor-exit-01.relays.net".to_string()),
         asn: Some(9009),
         org: Some("M247 Europe SRL".to_string()),
         isp: Some("M247 Europe SRL".to_string()),
@@ -340,7 +400,12 @@ async fn simulate_interception(
         false,
     );
     let ipv6_result = auditor::CheckResult::ok("IPV6_SAFE", "Утечек по протоколу IPv6 не обнаружено.");
-    let timezone_result = auditor::evaluate_system_timezone(telemetry.timezone.as_deref());
+    let dns_result = auditor::CheckResult::ok("DNS_CLEAN", "Утечек через локальные DNS-резолверы РФ не обнаружено.");
+    let timezone_result = auditor::evaluate_system_timezone(telemetry.timezone.as_deref(), None);
+    let location_result = auditor::check_os_location_services();
+    let reverse_dns_result = auditor::evaluate_reverse_dns_ptr(&telemetry);
+    let dns_country_result = auditor::evaluate_dns_country_consistency(&telemetry, None);
+    let locale_result = auditor::evaluate_locale_env_hygiene(None);
 
     let checks = vec![
         geo_result.clone(),
@@ -349,7 +414,12 @@ async fn simulate_interception(
         dnsbl_result.clone(),
         asn_result.clone(),
         ipv6_result.clone(),
+        dns_result,
         timezone_result.clone(),
+        location_result,
+        reverse_dns_result,
+        dns_country_result,
+        locale_result,
     ];
 
     let report = auditor::RiskReport {
@@ -382,12 +452,10 @@ async fn simulate_interception(
         ttl_seconds: proxy::hold_queue::DEFAULT_HOLD_TTL_SECS,
         scope: "simulation".to_string(),
         network_change: None,
+        is_simulation: true,
     };
 
-    if let Some(popup) = app.get_webview_window("alert-popup") {
-        let _ = popup.show();
-        let _ = popup.set_focus();
-    }
+    show_and_position_alert_popup(&app);
     let _ = app.emit("interceptor://risk-detected", &payload);
 
     Ok(())
@@ -396,12 +464,31 @@ async fn simulate_interception(
 #[tauri::command]
 async fn toggle_sysproxy(
     enable: bool,
+    state: tauri::State<'_, state::AppState>,
+    auditor: tauri::State<'_, auditor::Auditor>,
     proxy_manager: tauri::State<'_, proxy::ProxyManager>,
 ) -> Result<bool, String> {
     if enable {
         let pac_url = format!("http://{}/proxy.pac", proxy_manager.server.bound_addr);
         sysproxy::enable_sysproxy(&pac_url)?;
-        let _ = sysproxy::enable_cli_and_ide_protection(&pac_url);
+        let state_data = state.get_data().await;
+        let tz = if let Some(ref synced) = state_data.synced_ai_timezone {
+            Some(synced.clone())
+        } else {
+            let upstream_opt = state_data.upstream_proxy.as_ref().filter(|c| c.enabled);
+            if let Ok(tel) = auditor.resolver.resolve_with_upstream(false, upstream_opt).await {
+                if !is_sanctioned_or_blocked_country(&tel.country_code) && tel.timezone.is_some() {
+                    let detected = tel.timezone.unwrap();
+                    let _ = state.set_synced_ai_timezone(Some(detected.clone())).await;
+                    Some(detected)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        let _ = sysproxy::enable_cli_and_ide_protection_with_tz(&pac_url, tz.as_deref());
         Ok(true)
     } else {
         sysproxy::disable_all_sysproxy();
@@ -411,10 +498,83 @@ async fn toggle_sysproxy(
 
 #[tauri::command]
 async fn enable_cli_protection(
+    state: tauri::State<'_, state::AppState>,
+    auditor: tauri::State<'_, auditor::Auditor>,
     proxy_manager: tauri::State<'_, proxy::ProxyManager>,
 ) -> Result<sysproxy::CliProtectionReport, String> {
     let addr = proxy_manager.server.bound_addr.to_string();
-    Ok(sysproxy::enable_cli_and_ide_protection(&addr))
+    let state_data = state.get_data().await;
+    let tz = if let Some(ref synced) = state_data.synced_ai_timezone {
+        Some(synced.clone())
+    } else {
+        let upstream_opt = state_data.upstream_proxy.as_ref().filter(|c| c.enabled);
+        if let Ok(tel) = auditor.resolver.resolve_with_upstream(false, upstream_opt).await {
+            if !is_sanctioned_or_blocked_country(&tel.country_code) && tel.timezone.is_some() {
+                let detected = tel.timezone.unwrap();
+                let _ = state.set_synced_ai_timezone(Some(detected.clone())).await;
+                Some(detected)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+    Ok(sysproxy::enable_cli_and_ide_protection_with_tz(&addr, tz.as_deref()))
+}
+
+#[tauri::command]
+async fn get_gateway_stats(
+    state: tauri::State<'_, state::AppState>,
+) -> Result<state::GatewayStatsSnapshot, String> {
+    Ok(state.get_gateway_stats().await)
+}
+
+#[tauri::command]
+fn check_cli_protection_status() -> Result<bool, String> {
+    Ok(sysproxy::is_cli_protection_enabled())
+}
+
+#[tauri::command]
+fn disable_cli_protection() -> Result<bool, String> {
+    sysproxy::disable_cli_protection();
+    Ok(false)
+}
+
+#[tauri::command]
+async fn sync_ai_agents_timezone(
+    state: tauri::State<'_, state::AppState>,
+    proxy_manager: tauri::State<'_, proxy::ProxyManager>,
+    timezone: String,
+) -> Result<String, String> {
+    let tz_clean = timezone.trim().to_string();
+    if tz_clean.is_empty() {
+        return Err("Указан пустой часовой пояс".to_string());
+    }
+
+    state
+        .set_synced_ai_timezone(Some(tz_clean.clone()))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let addr = proxy_manager.server.bound_addr.to_string();
+    let report = sysproxy::enable_cli_and_ide_protection_with_tz(&addr, Some(&tz_clean));
+
+    let targets = if report.configured_targets.is_empty() {
+        "терминала и редакторов кода".to_string()
+    } else {
+        report.configured_targets.join(", ")
+    };
+
+    Ok(format!(
+        "Таймзона {} и английская локаль (en_US.UTF-8) синхронизированы для: {}.",
+        tz_clean, targets
+    ))
+}
+
+#[tauri::command]
+fn open_os_datetime_settings_cmd() -> Result<(), String> {
+    sysproxy::open_os_datetime_settings()
 }
 
 #[tauri::command]
@@ -445,6 +605,62 @@ async fn install_update(
     updater::download_and_install_update(&app, &download_url, &asset_name).await
 }
 
+pub type AppContext = state::AppState;
+
+#[tauri::command]
+async fn set_upstream_proxy(
+    key: String,
+    state: tauri::State<'_, AppContext>,
+) -> Result<state::UpstreamProxyConfig, String> {
+    let cfg = proxy::upstream::parse_upstream_key(&key)?;
+    state
+        .set_upstream_proxy(Some(cfg.clone()))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(cfg)
+}
+
+#[tauri::command]
+async fn toggle_upstream_proxy(
+    enabled: bool,
+    state: tauri::State<'_, AppContext>,
+) -> Result<Option<state::UpstreamProxyConfig>, String> {
+    let mut current = state.get_upstream_proxy().await;
+    if let Some(ref mut cfg) = current {
+        cfg.enabled = enabled;
+        state
+            .set_upstream_proxy(Some(cfg.clone()))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(Some(cfg.clone()))
+    } else {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+async fn clear_upstream_proxy(
+    state: tauri::State<'_, AppContext>,
+) -> Result<bool, String> {
+    state
+        .set_upstream_proxy(None)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn set_warmup_timer(
+    timestamp: Option<u64>,
+    state: tauri::State<'_, AppContext>,
+) -> Result<Option<u64>, String> {
+    state
+        .set_warmup_started_at(timestamp)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(timestamp)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -453,6 +669,12 @@ pub fn run() {
             // Register panic guard and OS termination signal watcher for systemic proxy clean-up
             sysproxy::register_clean_exit_guard();
             sysproxy::spawn_signal_cleanup_watcher();
+
+            // Ensure alert-popup has no shadow/decorations and stays borderless
+            if let Some(popup) = app.get_webview_window("alert-popup") {
+                let _ = popup.set_shadow(false);
+                let _ = popup.set_decorations(false);
+            }
 
             // Initialize persistent AppState
             let app_state = state::init_app_state(app.handle())
@@ -495,7 +717,9 @@ pub fn run() {
                 ),
                 Err(e) => eprintln!("Застава: не удалось включить защиту при старте: {e}"),
             }
-            let cli_report = sysproxy::enable_cli_and_ide_protection(&pac_url);
+            let init_tz = tauri::async_runtime::block_on(app_state.get_synced_ai_timezone());
+            let cli_report =
+                sysproxy::enable_cli_and_ide_protection_with_tz(&pac_url, init_tz.as_deref());
             println!(
                 "Застава: защита CLI/IDE включена ({})",
                 cli_report.configured_targets.join(", ")
@@ -685,6 +909,26 @@ pub fn run() {
                 }
             });
 
+            // Background periodic GitHub update checker (after 20s, then every 60m)
+            let updater_app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(20)).await;
+                loop {
+                    if let Ok(res) = updater::check_github_updates().await {
+                        if res.update_available {
+                            let _ = updater_app_handle.emit("updater://available", &res);
+                            if let Some(tray) = updater_app_handle.tray_by_id(MAIN_TRAY_ID) {
+                                let _ = tray.set_tooltip(Some(&format!(
+                                    "Застава — Доступна новая версия v{}",
+                                    res.latest_version
+                                )));
+                            }
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                }
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -700,6 +944,8 @@ pub fn run() {
             get_state,
             audit_connection,
             clean_app_cache,
+            scan_claude_data_cmd,
+            export_claude_data_cmd,
             pin_current_ip,
             unpin_ip,
             toggle_strict_pinning,
@@ -709,10 +955,19 @@ pub fn run() {
             simulate_interception,
             toggle_sysproxy,
             enable_cli_protection,
+            disable_cli_protection,
+            check_cli_protection_status,
+            sync_ai_agents_timezone,
+            open_os_datetime_settings_cmd,
             get_sysproxy_status,
             check_payment_bin,
             check_for_updates,
-            install_update
+            install_update,
+            set_upstream_proxy,
+            toggle_upstream_proxy,
+            clear_upstream_proxy,
+            set_warmup_timer,
+            get_gateway_stats
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -721,4 +976,28 @@ pub fn run() {
                 sysproxy::disable_all_sysproxy();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanctioned_or_blocked_country_detection() {
+        assert!(is_sanctioned_or_blocked_country("RU"));
+        assert!(is_sanctioned_or_blocked_country("ru"));
+        assert!(is_sanctioned_or_blocked_country(" BY "));
+        assert!(is_sanctioned_or_blocked_country("IR"));
+        assert!(is_sanctioned_or_blocked_country("KP"));
+        assert!(is_sanctioned_or_blocked_country("SY"));
+        assert!(is_sanctioned_or_blocked_country("CU"));
+
+        // Clean countries are not sanctioned
+        assert!(!is_sanctioned_or_blocked_country("NL"));
+        assert!(!is_sanctioned_or_blocked_country("GB"));
+        assert!(!is_sanctioned_or_blocked_country("US"));
+        assert!(!is_sanctioned_or_blocked_country("DE"));
+        assert!(!is_sanctioned_or_blocked_country("SE"));
+        assert!(!is_sanctioned_or_blocked_country("PL"));
+    }
 }

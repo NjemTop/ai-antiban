@@ -3,12 +3,16 @@ import {
   AppStateData,
   BinAuditResult,
   CleanResult,
+  ClaudeExportResult,
+  ClaudeLocalDataSummary,
   CliProtectionReport,
+  GatewayStatsSnapshot,
   InstallUpdateResult,
   InterceptionAction,
   ProviderId,
   RiskReport,
   UpdateCheckResult,
+  UpstreamProxyConfig,
 } from "../types";
 
 let mockState: AppStateData = {
@@ -17,6 +21,8 @@ let mockState: AppStateData = {
   ip_history: {},
   session_allowed_providers: [],
   blocked_providers: [],
+  upstream_proxy: null,
+  warmup_started_at: null,
 };
 
 export type MockScenario = "clean" | "turkey" | "ru";
@@ -65,9 +71,10 @@ export async function auditConnection(
     });
   }
 
-  const country = mockCountryOverride || "NL";
-  const isTurkey = country === "TR";
-  const isRu = country === "RU";
+  const hasUpstream = mockState.upstream_proxy?.enabled;
+  const country = hasUpstream ? "NL" : mockCountryOverride || "NL";
+  const isTurkey = !hasUpstream && country === "TR";
+  const isRu = !hasUpstream && country === "RU";
 
   let overall: "green" | "yellow" | "red" = "green";
   let score = 98;
@@ -274,6 +281,80 @@ export async function cleanAppCache(provider: ProviderId): Promise<CleanResult> 
   };
 }
 
+export async function scanClaudeLocalData(): Promise<ClaudeLocalDataSummary> {
+  if (isTauri()) {
+    return await invoke<ClaudeLocalDataSummary>("scan_claude_data_cmd");
+  }
+
+  return {
+    exists: true,
+    claude_dir_path: "~/.claude",
+    projects_count: 3,
+    sessions_count: 14,
+    plans_count: 2,
+    memory_files_count: 3,
+    total_size_bytes: 4_200_000,
+    projects: [
+      {
+        slug: "-Users-putiniye-local-projects-zastava",
+        decoded_path: "/Users/putiniye/local-projects/zastava",
+        sessions_count: 8,
+        has_memory: true,
+        total_bytes: 2_400_000,
+        last_modified: Math.floor(Date.now() / 1000) - 300,
+      },
+      {
+        slug: "-Users-putiniye-local-projects-cf-scanner",
+        decoded_path: "/Users/putiniye/local-projects/cf-scanner",
+        sessions_count: 4,
+        has_memory: false,
+        total_bytes: 1_100_000,
+        last_modified: Math.floor(Date.now() / 1000) - 3600,
+      },
+      {
+        slug: "-Users-putiniye-local-projects-ai-gateway",
+        decoded_path: "/Users/putiniye/local-projects/ai-gateway",
+        sessions_count: 2,
+        has_memory: true,
+        total_bytes: 700_000,
+        last_modified: Math.floor(Date.now() / 1000) - 86400,
+      },
+    ],
+    has_claude_md: true,
+    has_history: true,
+    has_settings: true,
+    has_desktop_config: true,
+    has_claude_json: true,
+  };
+}
+
+export async function exportClaudeLocalData(): Promise<ClaudeExportResult> {
+  if (isTauri()) {
+    return await invoke<ClaudeExportResult>("export_claude_data_cmd");
+  }
+
+  return {
+    export_dir_path: "~/Desktop/Claude_Handover_2026-11-08_195500",
+    zip_archive_path: "~/Desktop/Claude_Handover_2026-11-08_195500.zip",
+    index_summary_path: "~/Desktop/Claude_Handover_2026-11-08_195500/INDEX_SUMMARY.md",
+    restore_prompt_path: "~/Desktop/Claude_Handover_2026-11-08_195500/RESTORE_PROMPT.md",
+    restore_prompt_text: `# Системная директива переноса инженерного контекста
+
+Ты — ведущий инженер-архитектор. Пользователь подключил архив полного рабочего контекста из предыдущей сессии разработки.
+
+Корень архива контекста:
+~/Desktop/Claude_Handover_2026-11-08_195500
+
+Ключевые точки входа:
+1. Инженерная карта проектов: ~/Desktop/Claude_Handover_2026-11-08_195500/INDEX_SUMMARY.md
+2. Директории проектов и сессий: ~/Desktop/Claude_Handover_2026-11-08_195500/projects/
+3. Директория планов: ~/Desktop/Claude_Handover_2026-11-08_195500/plans/`,
+    projects_exported: 3,
+    sessions_exported: 14,
+    total_bytes: 4_200_000,
+  };
+}
+
 export async function resolveInterception(
   id: string,
   action: InterceptionAction,
@@ -341,8 +422,22 @@ export async function toggleSysproxy(enable: boolean): Promise<boolean> {
 
 export async function enableCliProtection(): Promise<CliProtectionReport> {
   if (isTauri()) {
-    return await invoke<CliProtectionReport>("enable_cli_protection");
+    try {
+      const res = await invoke<CliProtectionReport>("enable_cli_protection");
+      try {
+        localStorage.setItem("zastava_cli_protected", "true");
+      } catch {}
+      return res;
+    } catch (e) {
+      try {
+        localStorage.setItem("zastava_cli_protected", "true");
+      } catch {}
+      throw e;
+    }
   }
+  try {
+    localStorage.setItem("zastava_cli_protected", "true");
+  } catch {}
   return {
     enabled: true,
     proxy_url: "http://127.0.0.1:8899",
@@ -350,6 +445,50 @@ export async function enableCliProtection(): Promise<CliProtectionReport> {
     shell_command:
       'export HTTP_PROXY="http://127.0.0.1:8899" HTTPS_PROXY="http://127.0.0.1:8899" ALL_PROXY="http://127.0.0.1:8899"',
   };
+}
+
+export async function disableCliProtection(): Promise<boolean> {
+  if (isTauri()) {
+    try {
+      await invoke("disable_cli_protection");
+    } catch {
+      // fallback
+    }
+  }
+  try {
+    localStorage.setItem("zastava_cli_protected", "false");
+  } catch {}
+  return false;
+}
+
+export async function checkCliProtectionStatus(): Promise<boolean> {
+  if (isTauri()) {
+    try {
+      return await invoke<boolean>("check_cli_protection_status");
+    } catch {
+      // fallback
+    }
+  }
+  try {
+    return localStorage.getItem("zastava_cli_protected") === "true";
+  } catch {
+    return false;
+  }
+}
+
+export async function syncAiAgentsTimezone(timezone: string): Promise<string> {
+  if (isTauri()) {
+    return await invoke<string>("sync_ai_agents_timezone", { timezone });
+  }
+  mockState.synced_ai_timezone = timezone;
+  return `Таймзона ${timezone} и en_US.UTF-8 синхронизированы для VS Code, Claude Code и терминала.`;
+}
+
+export async function openOsDatetimeSettings(): Promise<void> {
+  if (isTauri()) {
+    return await invoke<void>("open_os_datetime_settings_cmd");
+  }
+  console.log("[Mock] Opening OS date & time settings");
 }
 
 export async function getSysproxyStatus(): Promise<boolean> {
@@ -469,4 +608,104 @@ export async function installUpdate(
     will_restart: false,
   };
 }
+
+export async function setUpstreamProxy(key: string): Promise<UpstreamProxyConfig> {
+  if (isTauri()) {
+    return await invoke<UpstreamProxyConfig>("set_upstream_proxy", { key });
+  }
+
+  const isHttp = key.toLowerCase().includes("http://");
+  const cfg: UpstreamProxyConfig = {
+    enabled: true,
+    raw_key: key,
+    protocol: isHttp ? "http" : "socks5",
+    host: "nl-exit.zastava.network",
+    port: isHttp ? 8080 : 1080,
+    username: key.includes("@") ? "user" : null,
+    password: key.includes(":") ? "pass" : null,
+    label: key.includes("#") ? decodeURIComponent(key.split("#")[1]) : "Zastava 2-Hop (NL)",
+  };
+
+  mockState = {
+    ...mockState,
+    upstream_proxy: cfg,
+  };
+
+  return cfg;
+}
+
+export async function toggleUpstreamProxy(enabled: boolean): Promise<UpstreamProxyConfig | null> {
+  if (isTauri()) {
+    return await invoke<UpstreamProxyConfig | null>("toggle_upstream_proxy", { enabled });
+  }
+
+  if (mockState.upstream_proxy) {
+    const updated: UpstreamProxyConfig = { ...mockState.upstream_proxy, enabled };
+    mockState = { ...mockState, upstream_proxy: updated };
+    return updated;
+  }
+  return null;
+}
+
+export async function clearUpstreamProxy(): Promise<boolean> {
+  if (isTauri()) {
+    return await invoke<boolean>("clear_upstream_proxy");
+  }
+
+  mockState = { ...mockState, upstream_proxy: null };
+  return true;
+}
+
+export async function setWarmupTimer(timestamp: number | null): Promise<number | null> {
+  if (isTauri()) {
+    return await invoke<number | null>("set_warmup_timer", { timestamp });
+  }
+
+  mockState = { ...mockState, warmup_started_at: timestamp };
+  return timestamp;
+}
+
+let mockGatewayStats: GatewayStatsSnapshot = {
+  protected_ai_requests: 38,
+  intercepted_leaks: 1,
+  direct_bypassed_requests: 114,
+  active_ai_tunnels: 0,
+  uptime_seconds: 3600,
+  last_protected_host: "api.anthropic.com",
+  recent_events: [
+    {
+      timestamp: Math.floor(Date.now() / 1000) - 12,
+      host: "api.anthropic.com",
+      provider: "anthropic",
+      action: "PROTECTED",
+      country: "GB",
+    },
+    {
+      timestamp: Math.floor(Date.now() / 1000) - 34,
+      host: "daily-cloudcode-pa.googleapis.com",
+      provider: "gemini",
+      action: "PROTECTED",
+      country: "GB",
+    },
+    {
+      timestamp: Math.floor(Date.now() / 1000) - 78,
+      host: "api.openai.com",
+      provider: "openai",
+      action: "PROTECTED",
+      country: "GB",
+    },
+  ],
+};
+
+export async function getGatewayStats(): Promise<GatewayStatsSnapshot> {
+  if (isTauri()) {
+    return await invoke<GatewayStatsSnapshot>("get_gateway_stats");
+  }
+  return {
+    ...mockGatewayStats,
+    uptime_seconds: mockGatewayStats.uptime_seconds + 2,
+    recent_events: [...mockGatewayStats.recent_events],
+  };
+}
+
 

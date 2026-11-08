@@ -6,8 +6,6 @@ import {
   RotateCw,
   Pin,
   Trash2,
-  FlaskConical,
-  Zap,
   Radio,
   Copy,
   Check,
@@ -18,29 +16,48 @@ import {
   Download,
   ExternalLink,
   X,
+  Globe,
+  Key,
+  ShieldCheck,
+  ShieldAlert,
+  AlertTriangle,
+  Zap,
+  Clock,
+  FolderArchive,
 } from "lucide-react";
 import {
   AppStateData,
+  ClaudeExportResult,
+  ClaudeLocalDataSummary,
+  GatewayStatsSnapshot,
   ProviderId,
   RiskInterceptPayload,
   RiskReport,
   UpdateCheckResult,
   UpdateProgressPayload,
+  UpdateStatusPayload,
 } from "../types";
 import {
   allowProviderSession,
   auditConnection,
+  checkCliProtectionStatus,
   checkForUpdates,
   cleanAppCache,
+  disableCliProtection,
   enableCliProtection,
+  exportClaudeLocalData,
   fetchAppState,
+  getGatewayStats,
   getMockScenario,
   getSysproxyStatus,
   installUpdate,
   MockScenario,
+  openOsDatetimeSettings,
   pinCurrentIp,
+  scanClaudeLocalData,
   setMockScenario,
   simulateInterception,
+  syncAiAgentsTimezone,
   toggleStrictPinning,
   toggleSysproxy,
   unblockProvider,
@@ -52,10 +69,83 @@ import { ProviderMatrix } from "./ProviderMatrix";
 import { DeepAuditTab } from "./DeepAuditTab";
 import { GuideViewer } from "./GuideViewer";
 import { BinCheckerTab } from "./BinCheckerTab";
+import { CleanIpTab } from "./CleanIpTab";
 import { ToastContainer, ToastMessage } from "./Toast";
 import { openExternal, openTelegramSupport } from "../utils/opener";
 
-type ActiveTab = "pulse" | "audit" | "guide" | "bin";
+type ActiveTab = "pulse" | "clean-ip" | "bin" | "audit" | "guide";
+
+export interface ParsedChangelogSection {
+  title?: string;
+  items: string[];
+}
+
+export function parseReleaseNotes(notes: string): ParsedChangelogSection[] {
+  if (!notes || !notes.trim()) {
+    return [{ items: ["Улучшения стабильности и безопасности сетевого шлюза."] }];
+  }
+
+  const lines = notes.split("\n");
+  const sections: ParsedChangelogSection[] = [];
+  let currentTitle: string | undefined = undefined;
+  let currentItems: string[] = [];
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    // Filter out download links and raw artifacts
+    if (
+      line.includes(".dmg") ||
+      line.includes(".exe") ||
+      line.includes(".tar.gz") ||
+      line.includes(".zip") ||
+      line.startsWith("---") ||
+      line.startsWith("***") ||
+      /^#{1,6}\s*(Скачать|Загрузка|Ссылки|Assets|Downloads)/i.test(line)
+    ) {
+      continue;
+    }
+
+    // Section title
+    if (line.startsWith("#")) {
+      if (currentItems.length > 0) {
+        sections.push({ title: currentTitle, items: currentItems });
+        currentItems = [];
+      }
+      currentTitle = line.replace(/^#+\s*/, "").replace(/[*_]/g, "").trim();
+      continue;
+    }
+
+    // Bullet point
+    if (/^[-*•]\s+/.test(line)) {
+      const cleanItem = line.replace(/^[-*•]\s+/, "").replace(/[*_]/g, "").trim();
+      if (cleanItem) {
+        currentItems.push(cleanItem);
+      }
+    } else if (/^\d+\.\s+/.test(line)) {
+      const cleanItem = line.replace(/^\d+\.\s+/, "").replace(/[*_]/g, "").trim();
+      if (cleanItem) {
+        currentItems.push(cleanItem);
+      }
+    } else if (currentItems.length > 0 && !line.startsWith(">") && !line.includes("http")) {
+      const cleanItem = line.replace(/[*_]/g, "").trim();
+      if (cleanItem.length > 3 && !cleanItem.toLowerCase().startsWith("для новых")) {
+        currentItems.push(cleanItem);
+      }
+    }
+  }
+
+  if (currentItems.length > 0) {
+    sections.push({ title: currentTitle, items: currentItems });
+  }
+
+  if (sections.length === 0 || sections.every((s) => s.items.length === 0)) {
+    return [{ items: [notes.slice(0, 300).trim()] }];
+  }
+
+  return sections;
+}
 
 interface DashboardProps {
   onSimulateInBrowser?: () => void;
@@ -63,8 +153,8 @@ interface DashboardProps {
 
 export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => {
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
-    const t = new URLSearchParams(window.location.search).get("tab");
-    if (t === "audit" || t === "guide" || t === "bin" || t === "pulse") return t;
+    const t = new URLSearchParams(window.location.search).get("tab") as ActiveTab | null;
+    if (t === "audit" || t === "guide" || t === "bin" || t === "pulse" || t === "clean-ip") return t;
     return "pulse";
   });
   const [state, setState] = useState<AppStateData | null>(null);
@@ -74,6 +164,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   const [sysproxyActive, setSysproxyActive] = useState<boolean>(true);
   const [copiedIp, setCopiedIp] = useState<boolean>(false);
   const [copiedCli, setCopiedCli] = useState<boolean>(false);
+  const [syncingTz, setSyncingTz] = useState<boolean>(false);
+  const [tzSyncedNotice, setTzSyncedNotice] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [interceptPayload, setInterceptPayload] = useState<RiskInterceptPayload | null>(null);
   const [initialGuideTarget, setInitialGuideTarget] = useState<string>("01-personal-vpn-15min");
@@ -82,6 +174,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   const [installingUpdate, setInstallingUpdate] = useState<boolean>(false);
   const [updateProgress, setUpdateProgress] = useState<UpdateProgressPayload | null>(null);
   const [showUpdateModal, setShowUpdateModal] = useState<boolean>(false);
+  const [gatewayStats, setGatewayStats] = useState<GatewayStatsSnapshot | null>(null);
+  const [pulseProtected, setPulseProtected] = useState<boolean>(false);
+  const [feedExpanded, setFeedExpanded] = useState<boolean>(false);
+
+  const [updaterStatus, setUpdaterStatus] = useState<UpdateStatusPayload | null>(null);
+  const [showChangelog, setShowChangelog] = useState<boolean>(false);
+  const [showFullReleaseText, setShowFullReleaseText] = useState<boolean>(false);
+
+  const [claudePanelExpanded, setClaudePanelExpanded] = useState<boolean>(false);
+  const [claudeSummary, setClaudeSummary] = useState<ClaudeLocalDataSummary | null>(null);
+  const [loadingClaudeSummary, setLoadingClaudeSummary] = useState<boolean>(false);
+  const [claudeExporting, setClaudeExporting] = useState<boolean>(false);
+  const [claudeExportResult, setClaudeExportResult] = useState<ClaudeExportResult | null>(null);
+  const [copiedPrompt, setCopiedPrompt] = useState<boolean>(false);
+  const [cleaningClaude, setCleaningClaude] = useState<boolean>(false);
+  const [cleaningGpt, setCleaningGpt] = useState<boolean>(false);
   const [scenario, setScenario] = useState<MockScenario>(() => {
     const s = new URLSearchParams(window.location.search).get("scenario") as MockScenario | null;
     if (s === "clean" || s === "turkey" || s === "ru") {
@@ -132,13 +240,41 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
 
       const elapsed = Math.round(performance.now() - startTime);
       setScanLatencyMs(Math.max(18, elapsed));
+      await refreshGatewayStats();
     } catch (err: any) {
       console.error("Failed to run audit:", err);
       showToast("Ошибка аудита", err?.message || String(err), "error");
     } finally {
       setRefreshing(false);
+      refreshGatewayStats();
     }
   };
+
+  const refreshGatewayStats = async () => {
+    try {
+      const stats = await getGatewayStats();
+      setGatewayStats((prev) => {
+        if (prev && stats.protected_ai_requests > prev.protected_ai_requests) {
+          setPulseProtected(true);
+          setTimeout(() => setPulseProtected(false), 900);
+        }
+        return stats;
+      });
+    } catch (err) {
+      console.warn("Could not fetch gateway stats:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== "pulse") return;
+
+    refreshGatewayStats();
+    const interval = setInterval(() => {
+      refreshGatewayStats();
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [activeTab]);
 
   const handleCheckUpdates = async (silent: boolean = false) => {
     setCheckingUpdate(true);
@@ -206,6 +342,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   useEffect(() => {
     runFullAudit(false);
     handleCheckUpdates(true);
+    checkCliProtectionStatus()
+      .then((active) => {
+        if (active) setCopiedCli(true);
+      })
+      .catch(() => {});
 
     const unlisteners: Array<() => void> = [];
     if (isTauri()) {
@@ -224,6 +365,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
 
       listen<UpdateProgressPayload>("updater://progress", (event) => {
         setUpdateProgress(event.payload);
+      }).then((un) => unlisteners.push(un));
+
+      listen<UpdateCheckResult>("updater://available", (event) => {
+        setUpdateInfo(event.payload);
+      }).then((un) => unlisteners.push(un));
+
+      listen<UpdateStatusPayload>("updater://status", (event) => {
+        setUpdaterStatus(event.payload);
+        if (event.payload.stage === "installing" || event.payload.stage === "restarting") {
+          setInstallingUpdate(true);
+        }
       }).then((un) => unlisteners.push(un));
 
       listen("tray://pin-current-ip", async () => {
@@ -274,28 +426,60 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
     }
   };
 
-  const handleCopyCliProxy = async () => {
+  const handleToggleCliProtection = async () => {
     try {
-      const report = await enableCliProtection();
-      try {
-        await navigator.clipboard.writeText(report.shell_command);
-      } catch {
-        // clipboard optional if auto-configuration succeeded
+      if (copiedCli) {
+        await disableCliProtection();
+        setCopiedCli(false);
+        showToast(
+          "Защита CLI отключена",
+          "Маршрутизация прокси удалена из настроек редакторов и терминала.",
+          "info"
+        );
+      } else {
+        const report = await enableCliProtection();
+        try {
+          await navigator.clipboard.writeText(report.shell_command);
+        } catch {
+          // clipboard optional if auto-configuration succeeded
+        }
+        setCopiedCli(true);
+        const targets =
+          report.configured_targets.length > 0
+            ? report.configured_targets.join(", ")
+            : "Терминал и IDE";
+        showToast(
+          "Защита VS Code, Cursor и CLI включена",
+          `Автоматически настроено: ${targets}. При выходе из Заставы прокси отключается сам.`,
+          "success"
+        );
       }
-      setCopiedCli(true);
-      const targets =
-        report.configured_targets.length > 0
-          ? report.configured_targets.join(", ")
-          : "Терминал и IDE";
-      showToast(
-        "Защита VS Code, Cursor и CLI включена",
-        `Автоматически настроено: ${targets}. При выходе из Заставы прокси отключается сам.`,
-        "success"
-      );
-      setTimeout(() => setCopiedCli(false), 3000);
     } catch (err: any) {
       showToast("Ошибка настройки CLI", err?.message || String(err), "error");
     }
+  };
+
+  const handleSyncTz = async (tzOverride?: string) => {
+    const tz = tzOverride || activeReport?.telemetry?.timezone || "Europe/London";
+    setSyncingTz(true);
+    try {
+      const res = await syncAiAgentsTimezone(tz);
+      setTzSyncedNotice(true);
+      showToast("Часовой пояс ИИ синхронизирован", res, "success");
+      await runFullAudit(true);
+    } catch (err: any) {
+      showToast("Ошибка синхронизации TZ", err?.message || String(err), "error");
+    } finally {
+      setSyncingTz(false);
+    }
+  };
+
+  const handleOpenOsClockAndGuide = async () => {
+    try {
+      await openOsDatetimeSettings();
+    } catch {}
+    setInitialGuideTarget("03-os-privacy-setup");
+    setActiveTab("guide");
   };
 
   const handleToggleSysproxy = async () => {
@@ -382,23 +566,89 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
     }
   };
 
-  const handleCleanCache = async () => {
+  const loadClaudeSummary = async () => {
+    setLoadingClaudeSummary(true);
     try {
-      const [res1, res2] = await Promise.all([
-        cleanAppCache("anthropic"),
-        cleanAppCache("openai"),
-      ]);
-      const totalFiles = (res1.files_removed || 0) + (res2.files_removed || 0);
-      const totalBytes = (res1.bytes_freed || 0) + (res2.bytes_freed || 0);
-      const mbFreed = (totalBytes / (1024 * 1024)).toFixed(1);
+      const summary = await scanClaudeLocalData();
+      setClaudeSummary(summary);
+    } catch (err: any) {
+      console.error("Failed to scan Claude data:", err);
+    } finally {
+      setLoadingClaudeSummary(false);
+    }
+  };
 
+  const handleToggleClaudePanel = () => {
+    const next = !claudePanelExpanded;
+    setClaudePanelExpanded(next);
+    if (next && !claudeSummary) {
+      loadClaudeSummary();
+    }
+  };
+
+  const handleExportClaude = async () => {
+    setClaudeExporting(true);
+    try {
+      const res = await exportClaudeLocalData();
+      setClaudeExportResult(res);
       showToast(
-        "Кэш ИИ-клиентов очищен",
-        `Удалено файлов: ${totalFiles} (${mbFreed} МБ). Локальные трекеры сброшены.`,
+        "Архив Claude готов",
+        `Экспорт сохранен на Рабочем столе: ${res.zip_archive_path || res.export_dir_path}`,
         "success"
       );
     } catch (err: any) {
-      showToast("Очистка кэша", err?.message || String(err), "error");
+      showToast("Ошибка экспорта", err?.message || String(err), "error");
+    } finally {
+      setClaudeExporting(false);
+    }
+  };
+
+  const handleCopyRestorePrompt = async () => {
+    try {
+      let promptText = claudeExportResult?.restore_prompt_text;
+      if (!promptText) {
+        setClaudeExporting(true);
+        const res = await exportClaudeLocalData();
+        setClaudeExportResult(res);
+        promptText = res.restore_prompt_text;
+        setClaudeExporting(false);
+      }
+      if (promptText) {
+        await navigator.clipboard.writeText(promptText);
+        setCopiedPrompt(true);
+        showToast(
+          "Промт скопирован в буфер",
+          "Вставьте его в Antigravity, Cursor, Windsurf или новый Claude",
+          "success"
+        );
+        setTimeout(() => setCopiedPrompt(false), 2000);
+      }
+    } catch (err: any) {
+      setClaudeExporting(false);
+      showToast("Ошибка копирования", err?.message || String(err), "error");
+    }
+  };
+
+  const handleCleanSpecificClientCache = async (provider: ProviderId) => {
+    const isClaude = provider === "anthropic";
+    if (isClaude) setCleaningClaude(true);
+    else setCleaningGpt(true);
+
+    try {
+      const res = await cleanAppCache(provider);
+      const totalFiles = res.files_removed || 0;
+      const mbFreed = ((res.bytes_freed || 0) / (1024 * 1024)).toFixed(1);
+      const clientName = isClaude ? "Claude Desktop" : "ChatGPT Desktop";
+      showToast(
+        `Кэш ${clientName} сброшен`,
+        `Удалено файлов: ${totalFiles} (${mbFreed} МБ). Cookies и антифрод-реестры очищены.`,
+        "success"
+      );
+    } catch (err: any) {
+      showToast("Ошибка сброса", err?.message || String(err), "error");
+    } finally {
+      if (isClaude) setCleaningClaude(false);
+      else setCleaningGpt(false);
     }
   };
 
@@ -452,7 +702,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   };
 
   return (
-    <div className="w-[380px] min-h-[560px] max-w-[380px] bg-[#0A0B0E] text-zinc-100 flex flex-col justify-between p-3 select-none font-sans border border-white/[0.08] rounded-xl shadow-2xl relative">
+    <div className="w-full max-w-[460px] min-h-[660px] bg-[#0A0B0E] text-zinc-100 flex flex-col justify-between p-3.5 select-none font-sans border border-white/[0.08] rounded-xl shadow-2xl relative">
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
       {/* GitHub Update Check & Auto-Updater Modal */}
@@ -497,24 +747,61 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
               </button>
             </div>
 
-            <div className="bg-black/40 border border-white/[0.06] rounded-lg p-2 max-h-[140px] overflow-y-auto text-[10.5px] text-zinc-300 whitespace-pre-wrap leading-relaxed font-sans">
-              {updateInfo.release_notes || updateInfo.release_name || "Описание релиза отсутствует."}
+            <div className="bg-black/40 border border-white/[0.06] rounded-lg p-2 max-h-[160px] overflow-y-auto text-[10.5px] text-zinc-300 leading-relaxed font-sans space-y-2">
+              <div className="flex items-center justify-between pb-1 border-b border-white/[0.05] text-[9px] text-zinc-500 font-mono">
+                <span>ИЗМЕНЕНИЯ</span>
+                <button
+                  type="button"
+                  onClick={() => setShowFullReleaseText((v) => !v)}
+                  className="text-zinc-400 hover:text-zinc-200 underline cursor-pointer"
+                >
+                  {showFullReleaseText ? "Краткий вид" : "Полный текст"}
+                </button>
+              </div>
+              {showFullReleaseText ? (
+                <div className="whitespace-pre-wrap text-[10px]">
+                  {updateInfo.release_notes || updateInfo.release_name || "Описание релиза отсутствует."}
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {parseReleaseNotes(updateInfo.release_notes || updateInfo.release_name || "").map(
+                    (sec, sIdx) => (
+                      <div key={sIdx} className="space-y-0.5">
+                        {sec.title && (
+                          <div className="text-[9.5px] font-semibold text-zinc-200 font-mono">
+                            {sec.title}
+                          </div>
+                        )}
+                        <ul className="space-y-1 pl-1">
+                          {sec.items.map((item, iIdx) => (
+                            <li key={iIdx} className="flex items-start gap-1.5 text-zinc-300 leading-tight">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0 mt-1" />
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
             </div>
 
-            {installingUpdate && updateProgress && (
+            {installingUpdate && (
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-[10px] font-mono text-emerald-300">
                   <span>
-                    {updateProgress.phase === "installing"
-                      ? "Установка обновления и перезапуск..."
-                      : "Скачивание релиза с GitHub..."}
+                    {updaterStatus?.message ||
+                      (updateProgress?.phase === "installing"
+                        ? "Установка обновления и перезапуск..."
+                        : "Скачивание релиза с GitHub...")}
                   </span>
-                  <span>{updateProgress.percent}%</span>
+                  <span>{updateProgress?.percent ?? 50}%</span>
                 </div>
                 <div className="w-full h-1.5 bg-zinc-900 rounded-full overflow-hidden border border-white/[0.06]">
                   <div
                     className="h-full bg-emerald-400 transition-all duration-150"
-                    style={{ width: `${Math.max(5, updateProgress.percent)}%` }}
+                    style={{ width: `${Math.max(5, updateProgress?.percent ?? 50)}%` }}
                   />
                 </div>
               </div>
@@ -627,7 +914,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                       : "bg-zinc-900 hover:bg-zinc-800 border-white/[0.08] text-zinc-300"
                   }`}
                 >
-                  <span>v{updateInfo?.current_version || "1.0.5"}</span>
+                  <span>v{updateInfo?.current_version || "1.1.3"}</span>
                   <Download className={`w-2.5 h-2.5 ${checkingUpdate ? "animate-bounce text-emerald-400" : updateInfo?.update_available ? "text-amber-300" : "text-zinc-400"}`} />
                 </button>
               </div>
@@ -682,110 +969,240 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
           </div>
         </header>
 
-        {/* Segmented Control Navigation */}
-        <nav className="mt-2.5 grid grid-cols-4 gap-1 p-0.5 bg-[#12141A] rounded-lg border border-white/[0.07] text-[11px] font-medium">
+        {/* Segmented Control Navigation (5 tabs) */}
+        <nav className="mt-2.5 grid grid-cols-5 gap-1 p-0.5 bg-[#12141A] rounded-lg border border-white/[0.07] text-[11px] font-medium">
           <button
             type="button"
             onClick={() => setActiveTab("pulse")}
-            className={`py-1 px-1.5 rounded transition-all text-center cursor-pointer ${
+            className={`py-1.5 px-0.5 rounded-md transition-all text-center cursor-pointer ${
               activeTab === "pulse"
-                ? "bg-white/[0.09] text-white font-semibold shadow-xs"
+                ? "bg-white/[0.12] text-white font-bold shadow-xs"
                 : "text-zinc-400 hover:text-zinc-200"
             }`}
           >
-            Главная
+            Защита
           </button>
 
           <button
             type="button"
-            onClick={() => setActiveTab("audit")}
-            className={`py-1 px-1.5 rounded transition-all text-center cursor-pointer ${
-              activeTab === "audit"
-                ? "bg-white/[0.09] text-white font-semibold shadow-xs"
+            onClick={() => setActiveTab("clean-ip")}
+            className={`py-1.5 px-0.5 rounded-md transition-all text-center cursor-pointer flex items-center justify-center gap-1 ${
+              activeTab === "clean-ip"
+                ? "bg-white/[0.12] text-white font-bold shadow-xs"
                 : "text-zinc-400 hover:text-zinc-200"
             }`}
           >
-            Проверки (9)
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab("guide")}
-            className={`py-1 px-1.5 rounded transition-all text-center cursor-pointer ${
-              activeTab === "guide"
-                ? "bg-white/[0.09] text-white font-semibold shadow-xs"
-                : "text-zinc-400 hover:text-zinc-200"
-            }`}
-          >
-            VPN Гайд
+            <span>Чистый IP</span>
+            {state?.upstream_proxy?.enabled && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            )}
           </button>
 
           <button
             type="button"
             onClick={() => setActiveTab("bin")}
-            className={`py-1 px-1.5 rounded transition-all text-center cursor-pointer ${
+            className={`py-1.5 px-0.5 rounded-md transition-all text-center cursor-pointer ${
               activeTab === "bin"
-                ? "bg-white/[0.09] text-white font-semibold shadow-xs"
+                ? "bg-white/[0.12] text-white font-bold shadow-xs"
                 : "text-zinc-400 hover:text-zinc-200"
             }`}
           >
-            Биллинг
+            Подписка
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("audit")}
+            className={`py-1.5 px-0.5 rounded-md transition-all text-center cursor-pointer ${
+              activeTab === "audit"
+                ? "bg-white/[0.12] text-white font-bold shadow-xs"
+                : "text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            Проверки
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("guide")}
+            className={`py-1.5 px-0.5 rounded-md transition-all text-center cursor-pointer ${
+              activeTab === "guide"
+                ? "bg-white/[0.12] text-white font-bold shadow-xs"
+                : "text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            Гайды
           </button>
         </nav>
 
         {/* Main Tab Content */}
         <main className="mt-2.5 flex-1">
           {activeTab === "pulse" && (
-            <div className="space-y-2.5 animate-in fade-in duration-150">
-              {/* Telemetry Card */}
-              <div className="bg-[#12141A] rounded-lg border border-white/[0.07] p-2.5 space-y-2">
-                <div className="flex items-center justify-between text-[10px] text-zinc-400 pb-1.5 border-b border-white/[0.04]">
-                  <span className="uppercase tracking-wider font-semibold">
-                    Ваш IP и соединение
-                  </span>
+            <div className="space-y-3 animate-in fade-in duration-150">
+              {/* 0. Live macOS System Update Banner */}
+              {updateInfo?.update_available && (
+                <div className="bg-[#12141A] rounded-xl border border-amber-500/30 p-3 space-y-2.5 shadow-sm font-sans">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 animate-pulse" />
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-white tracking-tight truncate">
+                          Доступно обновление v{updateInfo.latest_version}
+                        </div>
+                        <div className="text-[10px] font-mono text-zinc-400">
+                          Текущая: v{updateInfo.current_version || "1.1.3"} · Релиз на GitHub
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowChangelog((v) => !v)}
+                        className="px-2 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-[10px] font-medium text-zinc-300 hover:text-white cursor-pointer transition-colors"
+                      >
+                        {showChangelog ? "Скрыть" : "Что изменилось"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={installingUpdate}
+                        onClick={handleInstallUpdate}
+                        className="px-2.5 py-1 rounded-md bg-emerald-500 hover:bg-emerald-400 active:scale-[0.99] text-zinc-950 font-bold text-[10.5px] cursor-pointer transition-colors flex items-center gap-1 disabled:opacity-50"
+                      >
+                        <Download className="w-3 h-3" />
+                        <span>
+                          {installingUpdate
+                            ? updaterStatus?.message || updateProgress?.phase || "Установка..."
+                            : "Установить и перезапустить"}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {showChangelog && (
+                    <div className="bg-black/50 border border-white/[0.06] rounded-lg p-2.5 space-y-2 text-[10.5px] max-h-[170px] overflow-y-auto animate-in fade-in duration-150">
+                      <div className="flex items-center justify-between pb-1 border-b border-white/[0.05] text-[9.5px] text-zinc-500 font-mono">
+                        <span>СПИСОК ИЗМЕНЕНИЙ</span>
+                        <button
+                          type="button"
+                          onClick={() => setShowFullReleaseText((v) => !v)}
+                          className="text-zinc-400 hover:text-zinc-200 underline cursor-pointer"
+                        >
+                          {showFullReleaseText ? "Краткий список" : "Полный текст"}
+                        </button>
+                      </div>
+
+                      {showFullReleaseText ? (
+                        <div className="whitespace-pre-wrap font-sans text-zinc-300 leading-relaxed text-[10px]">
+                          {updateInfo.release_notes || updateInfo.release_name || "Описание релиза отсутствует."}
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {parseReleaseNotes(updateInfo.release_notes || updateInfo.release_name || "").map(
+                            (section, sIdx) => (
+                              <div key={sIdx} className="space-y-1">
+                                {section.title && (
+                                  <div className="text-[10px] font-semibold text-zinc-200 font-mono">
+                                    {section.title}
+                                  </div>
+                                )}
+                                <ul className="space-y-1 pl-1">
+                                  {section.items.map((item, iIdx) => (
+                                    <li key={iIdx} className="flex items-start gap-1.5 text-zinc-300 leading-tight">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0 mt-1" />
+                                      <span>{item}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {installingUpdate && (
+                    <div className="space-y-1 pt-1 border-t border-white/[0.05]">
+                      <div className="flex items-center justify-between text-[10px] font-mono text-emerald-300">
+                        <span>{updaterStatus?.message || updateProgress?.phase || "Скачивание пакета..."}</span>
+                        <span>{updateProgress?.percent ?? 50}%</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-zinc-900 rounded-full overflow-hidden border border-white/[0.06]">
+                        <div
+                          className="h-full bg-emerald-400 transition-all duration-200"
+                          style={{ width: `${Math.max(5, updateProgress?.percent ?? 50)}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* 1. Главный вердикт (Human-Friendly Status Hero Card) */}
+              <div className="bg-[#12141A] rounded-xl border border-white/[0.08] p-3.5 space-y-3 shadow-xs">
+                <div className="flex items-center justify-between text-[10px] text-zinc-400 pb-2 border-b border-white/[0.05]">
+                  <div className="flex items-center gap-1.5">
+                    <span className="uppercase tracking-wider font-semibold">Ваш IP и безопасность</span>
+                    <span className="text-zinc-600">·</span>
+                    {state?.upstream_proxy?.enabled ? (
+                      <span className="px-1.5 py-0.2 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-mono text-[9px] font-bold flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        <span>Ключ Заставы 2-Hop</span>
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.2 rounded bg-zinc-900 border border-white/[0.07] text-zinc-400 font-mono text-[9px]">
+                        Системная сеть
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-1.5">
                     <span className={`w-1.5 h-1.5 rounded-full ${trayDotClass}`} />
-                    <span className="text-zinc-300 font-mono text-[9.5px]">LIVE</span>
+                    <span className="text-zinc-300 font-mono text-[9.5px]">АКТИВНО</span>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3">
-                  <TrustRing score={trustScore} size={50} strokeWidth={4} />
+                <div className="flex items-center gap-3.5">
+                  <TrustRing score={trustScore} size={54} strokeWidth={4.5} />
 
-                  <div className="flex-1 min-w-0 space-y-0.5">
+                  <div className="flex-1 min-w-0 space-y-1">
                     <div className="flex items-center justify-between">
                       <div
                         onClick={handleCopyIp}
                         className="flex items-center gap-1.5 cursor-pointer group"
                         title="Нажмите, чтобы скопировать IP"
                       >
-                        <span className="text-xs font-bold text-white font-mono tabular-nums tracking-tight group-hover:text-emerald-400 transition-colors">
+                        <span className="text-sm font-bold text-white font-mono tabular-nums tracking-tight group-hover:text-emerald-400 transition-colors">
                           {currentIp}
                         </span>
                         {copiedIp ? (
-                          <Check className="w-3 h-3 text-emerald-400" />
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
                         ) : (
-                          <Copy className="w-2.5 h-2.5 text-zinc-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                          <Copy className="w-3 h-3 text-zinc-500 opacity-0 group-hover:opacity-100 transition-opacity" />
                         )}
                       </div>
 
-                      <span className="px-1.5 py-0.2 rounded bg-zinc-900 border border-white/[0.07] text-[10px] font-mono text-zinc-200 font-bold">
+                      <span className="px-2 py-0.5 rounded bg-zinc-900 border border-white/[0.08] text-[11px] font-mono text-zinc-200 font-bold">
                         {currentCountry}
                       </span>
                     </div>
 
-                    <div className="text-[10.5px] text-zinc-400 font-mono truncate">
+                    <div className="text-[11px] text-zinc-400 font-mono truncate">
                       {activeReport?.telemetry.asn
                         ? `AS${activeReport.telemetry.asn} · ${
                             activeReport.telemetry.isp || activeReport.telemetry.org || "Хостинг"
                           }`
-                        : "Определение ASN..."}
+                        : "Определение провайдера..."}
                     </div>
 
-                    <div className="flex items-center gap-2 text-[9.5px] font-mono text-zinc-500 pt-0.5 tabular-nums">
+                    <div className="flex items-center gap-2 text-[10px] font-mono text-zinc-500 tabular-nums">
                       <span>
                         DNSBL:{" "}
-                        <strong className="text-emerald-400">
+                        <strong
+                          className={
+                            activeReport?.dnsbl_result?.status === "critical"
+                              ? "text-rose-400"
+                              : "text-emerald-400"
+                          }
+                        >
                           {activeReport?.dnsbl_clean_count || "4/4 чисто"}
                         </strong>
                       </span>
@@ -807,134 +1224,657 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                   </div>
                 </div>
 
-                {/* VPS Pinning Row */}
-                <div className="pt-1.5 border-t border-white/[0.04] flex items-center justify-between text-[10px]">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <Pin className={`w-3 h-3 shrink-0 ${isPinned ? "text-emerald-400" : "text-zinc-500"}`} />
-                    <span className="text-zinc-400 truncate font-mono">
-                      {state?.pinned_ip
-                        ? `Мой IP: ${state.pinned_ip}`
-                        : "Личный IP не закреплен"}
+                {/* Human-Friendly Verdict Message */}
+                <div
+                  className={`p-2.5 rounded-lg border text-xs leading-relaxed flex items-start gap-2 ${
+                    anyRed
+                      ? "bg-rose-500/10 border-rose-500/25 text-rose-200"
+                      : anyYellow
+                      ? "bg-amber-500/10 border-amber-500/25 text-amber-200"
+                      : "bg-emerald-500/10 border-emerald-500/25 text-emerald-200"
+                  }`}
+                >
+                  {anyRed ? (
+                    <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  ) : anyYellow ? (
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  ) : (
+                    <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  )}
+                  <div className="flex-1 text-[11px] font-sans">
+                    {anyRed ? (
+                      <span>
+                        <strong className="font-semibold text-rose-300">Опасно! </strong>
+                        Обнаружен российский/белорусский IP или критическая утечка. Запросы к ИИ автоматически удерживаются.
+                      </span>
+                    ) : anyYellow ? (
+                      <div className="space-y-1">
+                        <span>
+                          <strong className="font-semibold text-amber-300">Внимание: </strong>
+                          {tzMismatch
+                            ? "Часовой пояс компьютера не совпадает со страной IP (повышает риск бана при оплате с 31% до 48%)."
+                            : activeReport?.dnsbl_result?.status === "critical" ||
+                              activeReport?.dnsbl_result?.status === "warning"
+                            ? "IP замечен в спам-базах, коммерческий VPN может вызвать проверку платформы."
+                            : "Обнаружены предупреждения безопасности сети. Рекомендуется использовать выделенный IP."}
+                        </span>
+                        {tzMismatch && (
+                          <div className="pt-2 flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleSyncTz()}
+                              disabled={syncingTz}
+                              className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-[10.5px] font-sans font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                            >
+                              <Zap className="w-3 h-3 text-amber-400" />
+                              <span>
+                                {tzSyncedNotice
+                                  ? "TZ синхронизирован!"
+                                  : syncingTz
+                                  ? "Синхронизация..."
+                                  : "⚡ Авто-TZ для ИИ (VS Code / CLI)"}
+                              </span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={handleOpenOsClockAndGuide}
+                              className="px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-zinc-300 hover:text-white text-[10.5px] font-sans font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                            >
+                              <Clock className="w-3 h-3 text-zinc-400" />
+                              <span>🕒 Часы macOS и Гайд →</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <span>
+                        <strong className="font-semibold text-emerald-300">Вход безопасен: </strong>
+                        Вход в Claude и ChatGPT безопасен. Ваш IP чистый, утечек региона не обнаружено.
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Живой пульс защиты (Zero-MITM) */}
+                <div className="pt-2.5 border-t border-white/[0.06] space-y-2">
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-zinc-400 font-semibold uppercase tracking-wider flex items-center gap-1.5 font-sans">
+                      <span className="relative flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                      </span>
+                      <span>Живой пульс защиты (Zero-MITM)</span>
+                    </span>
+                    <span className="text-zinc-500 font-mono text-[9px] tabular-nums">
+                      {gatewayStats?.uptime_seconds ? `Uptime ${Math.floor(gatewayStats.uptime_seconds / 60)}м` : "Live Gateway"}
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1 shrink-0">
-                    {state?.pinned_ip ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={handleToggleStrict}
-                          title="Строгий режим блокирует трафик при любой смене IP"
-                          className={`px-1.5 py-0.5 rounded border text-[9px] font-mono cursor-pointer ${
-                            state.strict_pinning_enabled
-                              ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-400 font-bold"
-                              : "bg-zinc-900 border-white/[0.06] text-zinc-400"
-                          }`}
-                        >
-                          {state.strict_pinning_enabled ? "СТРОГИЙ" : "УВЕДОМЛ."}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleUnpinIp}
-                          className="px-1.5 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.06] text-[9px] text-zinc-400 hover:text-rose-400 cursor-pointer"
-                        >
-                          Сброс
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handlePinIp(currentIp)}
-                        className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-semibold cursor-pointer"
-                      >
-                        <Pin className="w-2.5 h-2.5" />
-                        <span>Закрепить IP</span>
-                      </button>
+                  {/* 3 Interactive Counter Cards in a 3-column grid */}
+                  <div className="grid grid-cols-3 gap-2">
+                    {/* Card 1: Защищено ИИ */}
+                    <div
+                      className={`bg-[#0c0e14] rounded-lg p-2 border transition-all ${
+                        pulseProtected
+                          ? "border-emerald-400 ring-1 ring-emerald-400/50 scale-[1.02]"
+                          : "border-emerald-500/25 hover:border-emerald-500/40"
+                      }`}
+                    >
+                      <div className="text-[10px] font-sans text-emerald-400 font-semibold flex items-center gap-1">
+                        <ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" />
+                        <span className="truncate">Защищено ИИ</span>
+                      </div>
+                      <div className="text-base font-bold font-mono text-emerald-300 mt-0.5 tabular-nums">
+                        {gatewayStats?.protected_ai_requests ?? 0}
+                      </div>
+                      <div className="text-[9px] font-sans text-zinc-500 mt-0.5 leading-tight truncate">
+                        пакетов проверено
+                      </div>
+                    </div>
+
+                    {/* Card 2: Утечек отбито */}
+                    <div className="bg-[#0c0e14] rounded-lg p-2 border border-rose-500/25 hover:border-rose-500/40 transition-all">
+                      <div className="text-[10px] font-sans text-rose-400 font-semibold flex items-center gap-1">
+                        <ShieldAlert className="w-3 h-3 text-rose-400 shrink-0" />
+                        <span className="truncate">Утечек отбито</span>
+                      </div>
+                      <div className="text-base font-bold font-mono text-rose-300 mt-0.5 tabular-nums">
+                        {gatewayStats?.intercepted_leaks ?? 0}
+                      </div>
+                      <div className="text-[9px] font-sans text-zinc-500 mt-0.5 leading-tight truncate">
+                        утечек остановлено
+                      </div>
+                    </div>
+
+                    {/* Card 3: Прямой транзит */}
+                    <div className="bg-[#0c0e14] rounded-lg p-2 border border-sky-500/25 hover:border-sky-500/40 transition-all">
+                      <div className="text-[10px] font-sans text-sky-400 font-semibold flex items-center gap-1">
+                        <Zap className="w-3 h-3 text-sky-400 shrink-0" />
+                        <span className="truncate">Прямой транзит</span>
+                      </div>
+                      <div className="text-base font-bold font-mono text-sky-300 mt-0.5 tabular-nums">
+                        {gatewayStats?.direct_bypassed_requests ?? 0}
+                      </div>
+                      <div className="text-[9px] font-sans text-zinc-500 mt-0.5 leading-tight truncate">
+                        сайты без ИИ · 0 мс
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Calm explanation string under the 3 counters */}
+                  <div className="text-[10px] text-neutral-500 leading-relaxed font-sans px-0.5">
+                    Все запросы к ИИ проходят 12 проверок шлюза. Обычные сайты, GitHub и менеджеры пакетов идут напрямую без задержки.
+                  </div>
+
+                  {/* Live Activity Radar Pill (Expandable on click) */}
+                  <div
+                    onClick={() => setFeedExpanded(!feedExpanded)}
+                    className="bg-[#0c0e14] hover:bg-[#11131c] rounded-lg px-2.5 py-1.5 border border-white/[0.06] hover:border-white/[0.12] cursor-pointer transition-colors space-y-1.5"
+                    title="Нажмите, чтобы развернуть/свернуть живую ленту событий шлюза"
+                  >
+                    <div className="flex items-center justify-between text-[10px]">
+                      <div className="flex items-center gap-1.5 text-zinc-300 font-mono text-[9.5px] truncate">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                        <span>Активных туннелей ИИ: <strong className="text-emerald-300 font-bold">{gatewayStats?.active_ai_tunnels ?? 0}</strong></span>
+                      </div>
+                      <div className="flex items-center gap-1 text-[9px] font-sans text-zinc-400 hover:text-zinc-200 shrink-0">
+                        <span>{feedExpanded ? "Свернуть" : "Лента событий"}</span>
+                        <ChevronRight className={`w-3 h-3 transition-transform duration-200 ${feedExpanded ? "rotate-90" : ""}`} />
+                      </div>
+                    </div>
+
+                    <div className="text-[9.5px] font-mono text-zinc-400 truncate">
+                      <span className="text-zinc-500">Последний: </span>
+                      <span className="text-zinc-200">
+                        {gatewayStats?.last_protected_host || "Ожидание запросов Claude / GPT / Gemini..."}
+                      </span>
+                    </div>
+
+                    {/* Expandable mini-feed of stats.recent_events */}
+                    {feedExpanded && (
+                      <div className="pt-2 border-t border-white/[0.05] space-y-1.5 animate-in fade-in duration-150">
+                        {(!gatewayStats?.recent_events || gatewayStats.recent_events.length === 0) ? (
+                          <div className="text-[10px] font-sans text-zinc-500 text-center py-1.5">
+                            Ожидание первых запросов Claude, GPT, Gemini или Antigravity...
+                          </div>
+                        ) : (
+                          gatewayStats.recent_events.slice().reverse().map((ev, idx) => {
+                            const isDirect =
+                              ev.action?.toUpperCase() === "DIRECT" ||
+                              ev.kind === "direct" ||
+                              ev.provider?.toLowerCase() === "non-ai" ||
+                              ev.country === "DIRECT";
+                            const isProtected = ev.action?.toUpperCase() === "PROTECTED";
+
+                            return (
+                              <div
+                                key={idx}
+                                className="flex items-center justify-between text-[10px] bg-black/40 px-2 py-1 rounded border border-white/[0.04]"
+                              >
+                                <div className="flex items-center gap-1.5 min-w-0 truncate">
+                                  <span className="font-mono text-[8.5px] text-zinc-500 tabular-nums shrink-0">
+                                    {new Date(ev.timestamp > 1e11 ? ev.timestamp : ev.timestamp * 1000).toLocaleTimeString([], {
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                      second: "2-digit",
+                                    })}
+                                  </span>
+                                  <span className="font-mono text-zinc-200 text-[9.5px] truncate">{ev.host}</span>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0 ml-1.5">
+                                  {isDirect ? (
+                                    <div className="flex items-center gap-1 px-1.5 py-0.2 rounded bg-neutral-800/70 border border-neutral-700/60 text-neutral-400 text-[8.5px] font-mono font-medium">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 shrink-0" />
+                                      <span>НЕ-ИИ · НАПРЯМУЮ</span>
+                                    </div>
+                                  ) : isProtected ? (
+                                    <div className="flex items-center gap-1 px-1.5 py-0.2 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[8.5px] font-mono font-bold">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                                      <span>ИИ · ЗАЩИЩЕНО · {ev.country || "GB"}</span>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-1 px-1.5 py-0.2 rounded bg-rose-500/15 border border-rose-500/30 text-rose-400 text-[8.5px] font-mono font-bold">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-rose-400 shrink-0" />
+                                      <span>ИИ · УДЕРЖАНО · {ev.country || "??"}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
               </div>
 
-              {/* Provider Compatibility Matrix */}
+              {/* 2. Карточка «Что сейчас под защитой» (3 понятные строки) */}
+              <div className="bg-[#12141A] rounded-xl border border-white/[0.08] p-3.5 space-y-2.5 shadow-xs">
+                <div className="flex items-center justify-between pb-1.5 border-b border-white/[0.05]">
+                  <span className="text-[10px] tracking-wider uppercase text-zinc-400 font-semibold">
+                    Что сейчас под защитой
+                  </span>
+                  <span className="text-[10px] font-mono text-emerald-400 font-medium">Zero-MITM</span>
+                </div>
+
+                <div className="space-y-2.5 divide-y divide-white/[0.04]">
+                  {/* 1. Браузеры (Chrome, Safari, Arc, Яндекс) */}
+                  <div className="flex items-center justify-between pt-1 first:pt-0">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-7 h-7 rounded-lg bg-zinc-900 border border-white/[0.06] flex items-center justify-center text-zinc-300 shrink-0">
+                        <Globe className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-white">Браузеры</div>
+                        <div className="text-[10px] text-zinc-400 truncate">
+                          Chrome, Safari, Arc, Яндекс (через PAC)
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold border ${
+                          sysproxyActive
+                            ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-400"
+                            : "bg-zinc-900 border-white/[0.06] text-zinc-500"
+                        }`}
+                      >
+                        {sysproxyActive ? "Защищено" : "Отключено"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleToggleSysproxy}
+                        className="px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-[10px] font-medium text-zinc-300 hover:text-white cursor-pointer transition-colors"
+                      >
+                        {sysproxyActive ? "Выкл" : "Вкл"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 2. Редакторы кода (VS Code, Cursor, Windsurf, терминал) */}
+                  <div className="flex items-center justify-between pt-2.5">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-7 h-7 rounded-lg bg-zinc-900 border border-white/[0.06] flex items-center justify-center text-sky-400 shrink-0">
+                        <Terminal className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-white">Редакторы кода и CLI</div>
+                        <div className="text-[10px] text-zinc-400 truncate">
+                          VS Code, Cursor, Windsurf, терминал
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-semibold border ${
+                          copiedCli
+                            ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-400"
+                            : "bg-zinc-900 border-white/[0.06] text-zinc-500"
+                        }`}
+                      >
+                        {copiedCli ? "Защищено" : "Отключено"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleToggleCliProtection}
+                        className="px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-[10px] font-medium text-zinc-300 hover:text-white cursor-pointer transition-colors"
+                      >
+                        {copiedCli ? "Выкл" : "Вкл"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 3. Закрепление безопасного IP (Защита от смены сервера) */}
+                  <div className="flex items-center justify-between pt-2.5">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div
+                        className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${
+                          isPinned
+                            ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-400"
+                            : "bg-zinc-900 border-white/[0.06] text-zinc-400"
+                        }`}
+                      >
+                        <Pin className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold text-white">
+                          {state?.pinned_ip ? `Закреплен: ${state.pinned_ip}` : "Закрепление безопасного IP"}
+                        </div>
+                        <div className="text-[10px] text-zinc-400 truncate">
+                          {state?.pinned_ip
+                            ? state.strict_pinning_enabled
+                              ? "Строгий режим: блокирует запросы при смене сети"
+                              : "Режим уведомлений при смене IP"
+                            : "Защищает от банов при случайной смене VPN-сервера"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      {state?.pinned_ip ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={handleToggleStrict}
+                            title="Переключить строгий режим"
+                            className={`px-1.5 py-1 rounded border text-[9.5px] font-mono cursor-pointer ${
+                              state.strict_pinning_enabled
+                                ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-400 font-bold"
+                                : "bg-zinc-900 border-white/[0.06] text-zinc-400"
+                            }`}
+                          >
+                            {state.strict_pinning_enabled ? "СТРОГИЙ" : "УВЕДОМЛ."}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleUnpinIp}
+                            className="px-1.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.06] text-[9.5px] text-zinc-400 hover:text-rose-400 cursor-pointer"
+                          >
+                            Сброс
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handlePinIp(currentIp)}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10.5px] font-semibold cursor-pointer transition-colors"
+                        >
+                          <Pin className="w-3 h-3" />
+                          <span>Закрепить IP</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Статус по сервисам (ProviderMatrix) */}
               <ProviderMatrix
                 reports={reports}
                 state={state}
-                onNavigateToGuide={() => setActiveTab("guide")}
+                onNavigateToGuide={(guideId) => {
+                  if (guideId) setInitialGuideTarget(guideId);
+                  setActiveTab("guide");
+                }}
                 onAllowProvider={handleAllowProvider}
                 onUnblockProvider={handleUnblockProvider}
+                onRefresh={() => runFullAudit(true)}
               />
 
-              {/* Quick Actions & Hygiene */}
-              <div className="space-y-1.5">
-                <span className="text-[10px] tracking-wider uppercase text-zinc-400 font-semibold px-0.5">
-                  Быстрые действия
-                </span>
-
-                <div className="grid grid-cols-3 gap-1.5">
-                  <button
-                    type="button"
-                    onClick={handleCleanCache}
-                    className="p-2 rounded-lg bg-[#12141A] hover:bg-zinc-900 border border-white/[0.07] hover:border-white/[0.15] text-left transition-all cursor-pointer group"
-                  >
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200 group-hover:text-emerald-400 transition-colors">
-                      <Trash2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" strokeWidth={1.75} />
-                      <span className="truncate">Сброс кэша</span>
+              {/* 4. Кэш клиентов и перенос контекста Claude */}
+              <div className="bg-[#12141A] rounded-xl border border-white/[0.08] p-3 space-y-2.5 shadow-xs">
+                {/* Panel Header (Clickable Accordion) */}
+                <div
+                  onClick={handleToggleClaudePanel}
+                  className="flex items-center justify-between cursor-pointer group select-none"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center shrink-0">
+                      <FolderArchive className="w-3.5 h-3.5" />
                     </div>
-                    <div className="text-[9.5px] text-zinc-500 mt-0.5 truncate leading-tight">
-                      ID Claude / ChatGPT
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-white group-hover:text-emerald-300 transition-colors">
+                        Кэш клиентов и перенос контекста Claude
+                      </div>
+                      <div className="text-[10px] text-zinc-400 truncate">
+                        Экспорт сессий/памяти для любого ИИ и глубокий сброс меток блокировки
+                      </div>
                     </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleCopyCliProxy}
-                    className="p-2 rounded-lg bg-[#12141A] hover:bg-zinc-900 border border-white/[0.07] hover:border-white/[0.15] text-left transition-all cursor-pointer group"
-                  >
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200 group-hover:text-sky-400 transition-colors">
-                      <Terminal className="w-3.5 h-3.5 text-sky-400 shrink-0" strokeWidth={1.75} />
-                      <span className="truncate">{copiedCli ? "Настроено!" : "Защита CLI"}</span>
-                    </div>
-                    <div className="text-[9.5px] text-zinc-500 mt-0.5 truncate leading-tight">
-                      VS Code / Cursor / CLI
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleSimulate}
-                    className="p-2 rounded-lg bg-[#12141A] hover:bg-zinc-900 border border-white/[0.07] hover:border-white/[0.15] text-left transition-all cursor-pointer group"
-                  >
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200 group-hover:text-amber-400 transition-colors">
-                      <FlaskConical className="w-3.5 h-3.5 text-amber-400 shrink-0" strokeWidth={1.75} />
-                      <span className="truncate">Тест HOLD</span>
-                    </div>
-                    <div className="text-[9.5px] text-zinc-500 mt-0.5 truncate leading-tight">
-                      Симуляция 403
-                    </div>
-                  </button>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                    <span className="text-[10px] font-mono text-zinc-400 group-hover:text-zinc-200">
+                      {claudePanelExpanded ? "Свернуть" : "Открыть"}
+                    </span>
+                    <ChevronRight
+                      className={`w-3.5 h-3.5 text-zinc-400 group-hover:text-white transition-transform duration-200 ${
+                        claudePanelExpanded ? "rotate-90" : ""
+                      }`}
+                    />
+                  </div>
                 </div>
+
+                {/* Expanded Content */}
+                {claudePanelExpanded && (
+                  <div className="pt-2 border-t border-white/[0.06] space-y-3 animate-in fade-in duration-150">
+                    {/* Блок 1: Экспорт локальных данных Claude (~/.claude) */}
+                    <div className="bg-[#0c0e14] rounded-lg p-2.5 border border-white/[0.06] space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="text-[10.5px] font-semibold text-zinc-200 flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                          <span>Экспорт локальных данных Claude (~/.claude)</span>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={loadingClaudeSummary}
+                          onClick={loadClaudeSummary}
+                          className="text-[9px] font-mono text-zinc-400 hover:text-zinc-200 flex items-center gap-1 cursor-pointer"
+                          title="Пересканировать директорию ~/.claude"
+                        >
+                          <RotateCw
+                            className={`w-2.5 h-2.5 ${
+                              loadingClaudeSummary ? "animate-spin text-emerald-400" : ""
+                            }`}
+                          />
+                          <span>Сканировать</span>
+                        </button>
+                      </div>
+
+                      {/* Engineering Summary in Monospace */}
+                      <div className="bg-black/50 rounded px-2.5 py-1.5 border border-white/[0.04] text-[9.5px] font-mono tabular-nums text-zinc-300 space-y-1">
+                        <div className="flex items-center justify-between flex-wrap gap-x-2 gap-y-0.5">
+                          <span>
+                            Проектов:{" "}
+                            <strong className="text-emerald-300 font-bold">
+                              {claudeSummary?.projects_count ?? 0}
+                            </strong>
+                          </span>
+                          <span>·</span>
+                          <span>
+                            Сессий (.jsonl):{" "}
+                            <strong className="text-emerald-300 font-bold">
+                              {claudeSummary?.sessions_count ?? 0}
+                            </strong>
+                          </span>
+                          <span>·</span>
+                          <span>
+                            Файлов памяти:{" "}
+                            <strong className="text-emerald-300 font-bold">
+                              {claudeSummary?.memory_files_count ?? 0}
+                            </strong>
+                          </span>
+                          <span>·</span>
+                          <span>
+                            Планов:{" "}
+                            <strong className="text-emerald-300 font-bold">
+                              {claudeSummary?.plans_count ?? 0}
+                            </strong>
+                          </span>
+                          <span>·</span>
+                          <span>
+                            Объем:{" "}
+                            <strong className="text-emerald-300 font-bold">
+                              {((claudeSummary?.total_size_bytes ?? 0) / (1024 * 1024)).toFixed(1)} МБ
+                            </strong>
+                          </span>
+                        </div>
+
+                        {/* Compact Top-3 Projects List */}
+                        {claudeSummary?.projects && claudeSummary.projects.length > 0 && (
+                          <div className="pt-1.5 border-t border-white/[0.04] space-y-1">
+                            <div className="text-[9px] text-zinc-500 uppercase tracking-wider">
+                              Активные проекты:
+                            </div>
+                            {claudeSummary.projects.slice(0, 3).map((p, pIdx) => (
+                              <div
+                                key={pIdx}
+                                className="flex items-center justify-between text-[9px] text-zinc-400 bg-white/[0.02] px-1.5 py-0.5 rounded truncate"
+                              >
+                                <span
+                                  className="truncate text-zinc-300 max-w-[250px]"
+                                  title={p.decoded_path}
+                                >
+                                  {p.decoded_path}
+                                </span>
+                                <div className="flex items-center gap-1.5 shrink-0 ml-1.5 text-zinc-500">
+                                  <span>{p.sessions_count} сессий</span>
+                                  {p.has_memory && (
+                                    <span className="px-1 py-0.2 rounded bg-emerald-500/15 text-emerald-300 text-[8px] font-bold">
+                                      ПАМЯТЬ
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 2 Action Buttons in a row */}
+                      <div className="grid grid-cols-2 gap-2 pt-0.5">
+                        <button
+                          type="button"
+                          disabled={claudeExporting}
+                          onClick={handleExportClaude}
+                          className="py-1.5 px-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 active:scale-[0.99] text-zinc-950 text-[10.5px] font-sans font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors truncate"
+                        >
+                          <FolderArchive className="w-3 h-3 shrink-0" />
+                          <span className="truncate">
+                            {claudeExporting ? "Упаковка..." : "Упаковать архив на Рабочий стол"}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={claudeExporting}
+                          onClick={handleCopyRestorePrompt}
+                          className="py-1.5 px-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 active:scale-[0.99] border border-white/[0.1] hover:border-white/[0.2] text-zinc-200 text-[10.5px] font-sans font-medium flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors truncate"
+                        >
+                          {copiedPrompt ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-400 shrink-0" />
+                              <span className="text-emerald-300 truncate">Промт скопирован в буфер</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3 text-zinc-400 shrink-0" />
+                              <span className="truncate">Скопировать промт для другого ИИ</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* Confirmation box if archive was created */}
+                      {claudeExportResult && (
+                        <div className="bg-emerald-500/10 border border-emerald-500/25 rounded-md p-2 text-[9.5px] font-mono text-emerald-300 space-y-0.5 animate-in fade-in duration-150">
+                          <div className="font-bold flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                            <span>Архив сохранен на Рабочем столе:</span>
+                          </div>
+                          <div className="text-zinc-300 truncate">
+                            {claudeExportResult.zip_archive_path || claudeExportResult.export_dir_path}
+                          </div>
+                          <div className="text-zinc-400 truncate">
+                            Карта: {claudeExportResult.index_summary_path}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 1-line note */}
+                      <div className="text-[10px] text-zinc-400 leading-relaxed font-sans px-0.5">
+                        Создает архив всех сессий, транскриптов и памяти + файл INDEX_SUMMARY.md и промт для быстрого продолжения работы в Antigravity, Cursor, Windsurf или новом аккаунте Claude.
+                      </div>
+                    </div>
+
+                    {/* Блок 2: Глубокий сброс кэша и меток устройства */}
+                    <div className="bg-[#0c0e14] rounded-lg p-2.5 border border-white/[0.06] space-y-2">
+                      <div className="text-[10.5px] font-semibold text-zinc-200 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-rose-400 shrink-0" />
+                        <span>Глубокий сброс кэша и меток устройства</span>
+                      </div>
+
+                      <div className="text-[10px] text-zinc-400 leading-relaxed font-sans px-0.5">
+                        Удаляет Cookies, Network State и локальные антифрод-реестры Desktop-приложений. Проекты в ~/.claude и настройки MCP (claude_desktop_config.json) не затрагиваются.
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 pt-0.5">
+                        <button
+                          type="button"
+                          disabled={cleaningClaude}
+                          onClick={() => handleCleanSpecificClientCache("anthropic")}
+                          className="py-1.5 px-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 active:scale-[0.99] border border-rose-500/30 hover:border-rose-500/50 text-rose-300 text-[10.5px] font-sans font-medium flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors truncate"
+                        >
+                          <Trash2 className="w-3 h-3 text-rose-400 shrink-0" />
+                          <span className="truncate">
+                            {cleaningClaude ? "Очистка..." : "Сброс кэша Claude Desktop"}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={cleaningGpt}
+                          onClick={() => handleCleanSpecificClientCache("openai")}
+                          className="py-1.5 px-2 rounded-lg bg-zinc-900 hover:bg-zinc-800 active:scale-[0.99] border border-white/[0.1] hover:border-white/[0.2] text-zinc-300 hover:text-white text-[10.5px] font-sans font-medium flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors truncate"
+                        >
+                          <Trash2 className="w-3 h-3 text-zinc-400 shrink-0" />
+                          <span className="truncate">
+                            {cleaningGpt ? "Очистка..." : "Сброс кэша ChatGPT Desktop"}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Monetization / Quick Jump Banner */}
+              {/* 5. Баннер быстрого перехода в «Чистый IP» */}
               <div
-                onClick={() => setActiveTab("guide")}
-                className="p-2.5 rounded-lg bg-gradient-to-r from-emerald-950/30 to-[#12141A] border border-emerald-500/25 hover:border-emerald-500/40 cursor-pointer flex items-center justify-between transition-all group"
+                onClick={() => setActiveTab("clean-ip")}
+                className="p-3 rounded-xl bg-gradient-to-r from-emerald-950/40 via-sky-950/20 to-[#12141A] border border-emerald-500/30 hover:border-emerald-500/50 cursor-pointer flex items-center justify-between transition-all group shadow-sm"
               >
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
-                    <Zap className="w-3 h-3" strokeWidth={1.75} />
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+                    <Key className="w-4 h-4" />
                   </div>
                   <div>
-                    <div className="text-xs font-bold text-white group-hover:text-emerald-300 transition-colors">
-                      Свой чистый VPN за 15 мин
+                    <div className="text-xs font-bold text-white group-hover:text-emerald-300 transition-colors flex items-center gap-1.5">
+                      <span>Чистый IP только для ИИ (2-Hop)</span>
+                      {state?.upstream_proxy?.enabled && (
+                        <span className="px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-mono text-[9px] font-bold">
+                          АКТИВЕН
+                        </span>
+                      )}
                     </div>
-                    <div className="text-[9.5px] text-zinc-400">
-                      Статический IP в NL/DE · Оплата картой РФ / СБП
+                    <div className="text-[10.5px] text-zinc-400">
+                      Подключить выделенный ключ или настроить свой VPS за 15 минут
                     </div>
                   </div>
                 </div>
-                <ChevronRight className="w-4 h-4 text-emerald-400 group-hover:translate-x-0.5 transition-transform" />
+                <ChevronRight className="w-4 h-4 text-emerald-400 group-hover:translate-x-1 transition-transform" />
               </div>
+            </div>
+          )}
+
+          {activeTab === "clean-ip" && (
+            <div className="animate-in fade-in duration-150">
+              <CleanIpTab
+                state={state}
+                onRefreshState={async () => {
+                  const st = await fetchAppState();
+                  setState(st);
+                }}
+                onAuditRefresh={async () => {
+                  await runFullAudit(true);
+                }}
+                onOpenGuide={(ref) => {
+                  setInitialGuideTarget(ref);
+                  setActiveTab("guide");
+                }}
+                onToast={showToast}
+              />
             </div>
           )}
 
@@ -947,6 +1887,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                   if (ref) setInitialGuideTarget(ref);
                   setActiveTab("guide");
                 }}
+                onSimulate={handleSimulate}
               />
             </div>
           )}
@@ -956,6 +1897,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
               <GuideViewer
                 initialGuide={initialGuideTarget}
                 currentIp={currentIp}
+                currentTimezone={activeReport?.telemetry?.timezone}
                 onPinIp={handlePinIp}
                 onToast={showToast}
               />
@@ -966,6 +1908,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
             <div className="animate-in fade-in duration-150">
               <BinCheckerTab
                 vpnCountry={currentCountry}
+                activeReport={activeReport}
+                state={state}
+                onStateChange={() => runFullAudit(false)}
                 onNavigateToPaymentGuide={() => {
                   setInitialGuideTarget("02-safe-payment-cards");
                   setActiveTab("guide");

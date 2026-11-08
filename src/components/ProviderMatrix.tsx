@@ -8,16 +8,20 @@ import {
   AlertTriangle,
   ShieldAlert,
   Unlock,
+  Clock,
+  Zap,
 } from "lucide-react";
 import { AppStateData, CheckResult, CheckStatus, ProviderId, RiskReport } from "../types";
 import { openExternal } from "../utils/opener";
+import { openOsDatetimeSettings, syncAiAgentsTimezone } from "../utils/api";
 
 interface ProviderMatrixProps {
   reports: Partial<Record<ProviderId, RiskReport>>;
   state: AppStateData | null;
-  onNavigateToGuide?: () => void;
+  onNavigateToGuide?: (guideId?: string) => void;
   onAllowProvider?: (provider: ProviderId) => void;
   onUnblockProvider?: (provider: ProviderId) => void;
+  onRefresh?: () => void;
 }
 
 interface ProviderMeta {
@@ -58,11 +62,29 @@ export const ProviderMatrix: React.FC<ProviderMatrixProps> = ({
   onNavigateToGuide,
   onAllowProvider,
   onUnblockProvider,
+  onRefresh,
 }) => {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [syncingTz, setSyncingTz] = useState<Record<string, boolean>>({});
+  const [syncedTz, setSyncedTz] = useState<Record<string, boolean>>({});
 
   const toggleExpand = (id: string) => {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const handleSyncTz = async (key: string, timezone: string) => {
+    setSyncingTz((prev) => ({ ...prev, [key]: true }));
+    try {
+      await syncAiAgentsTimezone(timezone);
+      setSyncedTz((prev) => ({ ...prev, [key]: true }));
+      if (onRefresh) {
+        onRefresh();
+      }
+    } catch (e) {
+      console.error("Failed to sync timezone:", e);
+    } finally {
+      setSyncingTz((prev) => ({ ...prev, [key]: false }));
+    }
   };
 
   return (
@@ -233,18 +255,25 @@ export const ProviderMatrix: React.FC<ProviderMatrixProps> = ({
                     </span>
                   </div>
 
-                  {(status === "critical" || isBlocked) && onAllowProvider && (
+                  {(status !== "ok" || isBlocked) && onAllowProvider && (
                     <div className="pl-3.5 flex items-center gap-2">
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
+                          if (isBlocked && onUnblockProvider) {
+                            onUnblockProvider(p.id);
+                          }
                           onAllowProvider(p.id);
                         }}
                         className="px-2 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-sans font-semibold flex items-center gap-1 transition-colors cursor-pointer"
                       >
                         <Unlock className="w-2.5 h-2.5" strokeWidth={2} />
-                        <span>Разблокировать и разрешить доступ</span>
+                        <span>
+                          {status === "critical" || isBlocked
+                            ? "Снять блок (разрешить сессию)"
+                            : "Разрешить сессию (игнорировать риск)"}
+                        </span>
                       </button>
                     </div>
                   )}
@@ -257,26 +286,73 @@ export const ProviderMatrix: React.FC<ProviderMatrixProps> = ({
                   {/* Show all triggered issues if any, otherwise show geo_result */}
                   {criticalChecks.length > 0 || warningChecks.length > 0 ? (
                     <div className="space-y-1.5">
-                      {[...criticalChecks, ...warningChecks].map((chk, idx) => (
-                        <div
-                          key={idx}
-                          className={`p-2 rounded border ${
-                            chk.status === "critical"
-                              ? "bg-rose-500/10 border-rose-500/25 text-rose-200"
-                              : "bg-amber-500/10 border-amber-500/25 text-amber-200"
-                          }`}
-                        >
-                          <div className="flex justify-between items-center text-[9.5px] font-mono mb-0.5">
-                            <span className="uppercase font-semibold">
-                              {chk.status === "critical" ? "Причина блокировки:" : "Предупреждение:"}
-                            </span>
-                            <span className="opacity-80">{chk.code}</span>
+                      {[...criticalChecks, ...warningChecks].map((chk, idx) => {
+                        const isTz = chk.code === "TIMEZONE_MISMATCH" || chk.code.includes("TIMEZONE");
+                        const targetTz = report?.telemetry?.timezone || "Europe/London";
+                        const tzKey = `${p.id}_${idx}`;
+
+                        return (
+                          <div
+                            key={idx}
+                            className={`p-2 rounded border ${
+                              chk.status === "critical"
+                                ? "bg-rose-500/10 border-rose-500/25 text-rose-200"
+                                : "bg-amber-500/10 border-amber-500/25 text-amber-200"
+                            }`}
+                          >
+                            <div className="flex justify-between items-center text-[9.5px] font-mono mb-0.5">
+                              <span className="uppercase font-semibold">
+                                {chk.status === "critical" ? "Причина блокировки:" : "Предупреждение:"}
+                              </span>
+                              <span className="opacity-80">{chk.code}</span>
+                            </div>
+                            <div className="text-[11px] font-sans leading-snug">
+                              {chk.message}
+                            </div>
+
+                            {/* 1-Click Timezone Sync inside TIMEZONE_MISMATCH warnings */}
+                            {isTz && (
+                              <div className="mt-2 pt-2 border-t border-amber-500/20 flex flex-wrap items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSyncTz(tzKey, targetTz);
+                                  }}
+                                  disabled={syncingTz[tzKey]}
+                                  className="px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-[10.5px] font-sans font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                                >
+                                  <Zap className="w-3 h-3 text-amber-400" />
+                                  <span>
+                                    {syncedTz[tzKey]
+                                      ? "TZ синхронизирован!"
+                                      : syncingTz[tzKey]
+                                      ? "Синхронизация..."
+                                      : "⚡ Авто-TZ для ИИ (VS Code / CLI)"}
+                                  </span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
+                                    try {
+                                      await openOsDatetimeSettings();
+                                    } catch {}
+                                    if (onNavigateToGuide) {
+                                      onNavigateToGuide("03-os-privacy-setup");
+                                    }
+                                  }}
+                                  className="px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-zinc-300 hover:text-white text-[10.5px] font-sans font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                                >
+                                  <Clock className="w-3 h-3 text-zinc-400" />
+                                  <span>🕒 Часы macOS и Гайд →</span>
+                                </button>
+                              </div>
+                            )}
                           </div>
-                          <div className="text-[11px] font-sans leading-snug">
-                            {chk.message}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : (
                     <>
@@ -307,7 +383,11 @@ export const ProviderMatrix: React.FC<ProviderMatrixProps> = ({
                         className="px-2.5 py-1 rounded bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-[10.5px] font-sans font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
                       >
                         <Unlock className="w-3 h-3" strokeWidth={2} />
-                        <span>Снять блок (разрешить сессию)</span>
+                        <span>
+                          {status === "critical" || isBlocked
+                            ? "Снять блок (разрешить сессию)"
+                            : "Разрешить сессию (игнорировать риск)"}
+                        </span>
                       </button>
                     )}
 

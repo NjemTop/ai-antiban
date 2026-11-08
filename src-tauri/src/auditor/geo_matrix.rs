@@ -84,7 +84,7 @@ impl ProviderId {
             return Some(ProviderId::Openai);
         }
 
-        // 3. Google Gemini / AI Studio / Vertex AI / Cloud AI Companion (Antigravity, Orca)
+        // 3. Google Gemini / AI Studio / Vertex AI / Cloud AI Companion (Antigravity, Orca, Cloud Code)
         if host == "gemini.google.com"
             || host.ends_with(".gemini.google.com")
             || host == "aistudio.google.com"
@@ -98,6 +98,27 @@ impl ProviderId {
             || host == "cloudaicompanion.googleapis.com"
             || host.ends_with(".cloudaicompanion.googleapis.com")
             || host.ends_with(".clients6.google.com")
+            || host == "daily-cloudcode-pa.googleapis.com"
+            || host == "cloudcode-pa.googleapis.com"
+            || host.ends_with(".cloudcode-pa.googleapis.com")
+            || host == "daily-cloudcode-pa.sandbox.googleapis.com"
+            || host == "autopush-cloudcode-pa.sandbox.googleapis.com"
+            || host == "preprod-daily-cloudcode-pa.sandbox.googleapis.com"
+            || host.ends_with(".cloudcode-pa.sandbox.googleapis.com")
+            || host == "aicode.googleapis.com"
+            || host.ends_with(".aicode.googleapis.com")
+            || host == "autopush-aicode.sandbox.googleapis.com"
+            || host == "preprod-aicode.sandbox.googleapis.com"
+            || host.ends_with(".aicode.sandbox.googleapis.com")
+            || host == "alkalimakersuiteapplets.pa.googleapis.com"
+            || host.ends_with(".alkalimakersuiteapplets.pa.googleapis.com")
+            || host == "antigravity.google"
+            || host.ends_with(".antigravity.google")
+            || host == "antigravity.google.com"
+            || host.ends_with(".antigravity.google.com")
+            || host == "share.gemini.google"
+            || host == "gemini.google"
+            || host.ends_with(".gemini.google")
         {
             return Some(ProviderId::Gemini);
         }
@@ -336,5 +357,21 @@ mod tests {
         assert_eq!(ProviderId::from_host("gemini.google.com:443"), Some(ProviderId::Gemini));
         assert_eq!(ProviderId::from_host("aistudio.google.com"), Some(ProviderId::Gemini));
         assert_eq!(ProviderId::from_host("example.com"), None);
+    }
+
+    #[test]
+    fn test_antigravity_and_cloudcode_endpoints_match_gemini() {
+        assert_eq!(ProviderId::from_host("daily-cloudcode-pa.googleapis.com"), Some(ProviderId::Gemini));
+        assert_eq!(ProviderId::from_host("cloudcode-pa.googleapis.com"), Some(ProviderId::Gemini));
+        assert_eq!(ProviderId::from_host("daily-cloudcode-pa.sandbox.googleapis.com"), Some(ProviderId::Gemini));
+        assert_eq!(ProviderId::from_host("autopush-cloudcode-pa.sandbox.googleapis.com"), Some(ProviderId::Gemini));
+        assert_eq!(ProviderId::from_host("preprod-daily-cloudcode-pa.sandbox.googleapis.com"), Some(ProviderId::Gemini));
+        assert_eq!(ProviderId::from_host("aicode.googleapis.com"), Some(ProviderId::Gemini));
+        assert_eq!(ProviderId::from_host("autopush-aicode.sandbox.googleapis.com"), Some(ProviderId::Gemini));
+        assert_eq!(ProviderId::from_host("preprod-aicode.sandbox.googleapis.com"), Some(ProviderId::Gemini));
+        assert_eq!(ProviderId::from_host("alkalimakersuiteapplets.pa.googleapis.com"), Some(ProviderId::Gemini));
+        assert_eq!(ProviderId::from_host("antigravity.google"), Some(ProviderId::Gemini));
+        assert_eq!(ProviderId::from_host("antigravity.google.com"), Some(ProviderId::Gemini));
+        assert_eq!(ProviderId::from_host("share.gemini.google"), Some(ProviderId::Gemini));
     }
 }

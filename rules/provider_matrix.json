@@ -86,7 +86,19 @@
         "generativelanguage.googleapis.com",
         "aiplatform.googleapis.com",
         "cloudaicompanion.googleapis.com",
-        "alkalimakersuite-pa.clients6.google.com"
+        "alkalimakersuite-pa.clients6.google.com",
+        "daily-cloudcode-pa.googleapis.com",
+        "cloudcode-pa.googleapis.com",
+        "daily-cloudcode-pa.sandbox.googleapis.com",
+        "autopush-cloudcode-pa.sandbox.googleapis.com",
+        "preprod-daily-cloudcode-pa.sandbox.googleapis.com",
+        "aicode.googleapis.com",
+        "autopush-aicode.sandbox.googleapis.com",
+        "preprod-aicode.sandbox.googleapis.com",
+        "alkalimakersuiteapplets.pa.googleapis.com",
+        "antigravity.google",
+        "antigravity.google.com",
+        "share.gemini.google"
       ],
       "blocked_countries": [
         "RU", "BY", "CN", "HK", "MO", "IR", "KP", "SY", "CU", "TR"

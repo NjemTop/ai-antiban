@@ -2,12 +2,14 @@ pub mod guard;
 pub mod hold_queue;
 pub mod pac;
 pub mod server;
+pub mod upstream;
 
 use std::sync::Arc;
 pub use guard::{Gate, GuardCtx, NetworkGuard, ALL_PROVIDERS};
 pub use hold_queue::{HoldQueue, HoldResolution, InterceptionAction, RiskInterceptPayload};
 pub use pac::generate_pac_script;
 pub use server::ProxyServer;
+pub use upstream::{connect_via_upstream, parse_upstream_key};
 use crate::auditor::Auditor;
 use crate::state::AppState;
 

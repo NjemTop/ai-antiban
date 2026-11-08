@@ -64,13 +64,29 @@ export interface IpHistoryEntry {
   timestamp: number;
 }
 
+export interface UpstreamProxyConfig {
+  enabled: boolean;
+  raw_key: string;
+  protocol: string;
+  host: string;
+  port: number;
+  username?: string | null;
+  password?: string | null;
+  label?: string | null;
+}
+
 export interface AppStateData {
   pinned_ip: string | null;
   strict_pinning_enabled: boolean;
   ip_history: Record<string, IpHistoryEntry[]>;
   session_allowed_providers: string[];
   blocked_providers: string[];
+  upstream_proxy?: UpstreamProxyConfig | null;
+  warmup_started_at?: number | null;
+  synced_ai_timezone?: string | null;
 }
+
+export type AppStateSnapshot = AppStateData;
 
 export type InterceptionAction =
   | "AllowSession"
@@ -95,6 +111,7 @@ export interface RiskInterceptPayload {
   ttl_seconds: number;
   scope?: "provider" | "network" | string;
   network_change?: NetworkChange | null;
+  is_simulation?: boolean;
 }
 
 export interface UpdateCheckResult {
@@ -117,6 +134,47 @@ export interface UpdateProgressPayload {
   phase: string;
 }
 
+export interface UpdateStatusPayload {
+  stage: string;
+  message: string;
+}
+
+export interface ClaudeProjectBrief {
+  slug: string;
+  decoded_path: string;
+  sessions_count: number;
+  has_memory: boolean;
+  total_bytes: number;
+  last_modified?: number | null;
+}
+
+export interface ClaudeLocalDataSummary {
+  exists: boolean;
+  claude_dir_path: string;
+  projects_count: number;
+  sessions_count: number;
+  plans_count: number;
+  memory_files_count: number;
+  total_size_bytes: number;
+  projects: ClaudeProjectBrief[];
+  has_claude_md: boolean;
+  has_history: boolean;
+  has_settings: boolean;
+  has_desktop_config: boolean;
+  has_claude_json: boolean;
+}
+
+export interface ClaudeExportResult {
+  export_dir_path: string;
+  zip_archive_path?: string | null;
+  index_summary_path: string;
+  restore_prompt_path: string;
+  restore_prompt_text: string;
+  projects_exported: number;
+  sessions_exported: number;
+  total_bytes: number;
+}
+
 export interface InstallUpdateResult {
   success: boolean;
   message: string;
@@ -128,6 +186,25 @@ export interface CliProtectionReport {
   proxy_url: string;
   configured_targets: string[];
   shell_command: string;
+}
+
+export interface RecentGatewayEvent {
+  timestamp: number;
+  host: string;
+  provider: string;
+  action: string; // "PROTECTED" | "HELD" | "BLOCKED" | "DIRECT"
+  kind?: string;
+  country: string;
+}
+
+export interface GatewayStatsSnapshot {
+  protected_ai_requests: number;
+  intercepted_leaks: number;
+  direct_bypassed_requests: number;
+  active_ai_tunnels: number;
+  uptime_seconds: number;
+  last_protected_host: string | null;
+  recent_events: RecentGatewayEvent[];
 }
 
 

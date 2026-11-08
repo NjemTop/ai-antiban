@@ -1,5 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -97,6 +98,19 @@ where
     deserializer.deserialize_any(AsnVisitor)
 }
 
+/// Upstream proxy gateway configuration (e.g. SOCKS5 / HTTP tunnel for AI traffic).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UpstreamProxyConfig {
+    pub enabled: bool,
+    pub raw_key: String,
+    pub protocol: String,
+    pub host: String,
+    pub port: u16,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub label: Option<String>,
+}
+
 /// Persistent state data structure serialized to `state.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppStateData {
@@ -110,6 +124,12 @@ pub struct AppStateData {
     pub session_allowed_providers: HashSet<String>,
     #[serde(default)]
     pub blocked_providers: HashSet<String>,
+    #[serde(default)]
+    pub upstream_proxy: Option<UpstreamProxyConfig>,
+    #[serde(default)]
+    pub warmup_started_at: Option<u64>,
+    #[serde(default)]
+    pub synced_ai_timezone: Option<String>,
 }
 
 impl Default for AppStateData {
@@ -125,16 +145,190 @@ impl Default for AppStateData {
             ip_history,
             session_allowed_providers: HashSet::new(),
             blocked_providers: HashSet::new(),
+            upstream_proxy: None,
+            warmup_started_at: None,
+            synced_ai_timezone: None,
         }
     }
 }
 
 /// Thread-safe wrapper for persistent application state.
+pub type AppContext = AppState;
+
+/// Single live event recorded by the gateway interceptor.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecentGatewayEvent {
+    pub timestamp: u64,
+    pub host: String,
+    pub provider: String,
+    pub action: String, // "PROTECTED" | "HELD" | "BLOCKED" | "DIRECT"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    pub country: String,
+}
+
+/// Instant snapshot of live traffic counters for the UI and system tray.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct GatewayStatsSnapshot {
+    pub protected_ai_requests: u64,
+    pub intercepted_leaks: u64,
+    pub direct_bypassed_requests: u64,
+    pub active_ai_tunnels: u64,
+    pub uptime_seconds: u64,
+    pub last_protected_host: Option<String>,
+    pub recent_events: Vec<RecentGatewayEvent>,
+}
+
+/// Thread-safe lock-free atomic tracker for live gateway traffic counters.
+#[derive(Debug)]
+pub struct GatewayStatsTracker {
+    pub start_time: std::time::Instant,
+    pub protected_ai_requests: AtomicU64,
+    pub intercepted_leaks: AtomicU64,
+    pub direct_bypassed_requests: AtomicU64,
+    pub active_ai_tunnels: AtomicU64,
+    pub last_protected_host: std::sync::RwLock<Option<String>>,
+    pub recent_events: std::sync::RwLock<VecDeque<RecentGatewayEvent>>,
+}
+
+/// RAII guard that tracks the active AI tunnel count.
+pub struct TunnelGuard {
+    tracker: Arc<GatewayStatsTracker>,
+}
+
+impl Drop for TunnelGuard {
+    fn drop(&mut self) {
+        self.tracker.active_ai_tunnels.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+impl Default for GatewayStatsTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GatewayStatsTracker {
+    pub fn new() -> Self {
+        Self {
+            start_time: std::time::Instant::now(),
+            protected_ai_requests: AtomicU64::new(0),
+            intercepted_leaks: AtomicU64::new(0),
+            direct_bypassed_requests: AtomicU64::new(0),
+            active_ai_tunnels: AtomicU64::new(0),
+            last_protected_host: std::sync::RwLock::new(None),
+            recent_events: std::sync::RwLock::new(VecDeque::with_capacity(20)),
+        }
+    }
+
+    pub fn record_protected(&self, host: &str, provider: &str, country: &str) {
+        self.protected_ai_requests.fetch_add(1, Ordering::SeqCst);
+        if let Ok(mut l) = self.last_protected_host.write() {
+            *l = Some(host.to_string());
+        }
+        let event = RecentGatewayEvent {
+            timestamp: crate::auditor::network::current_timestamp(),
+            host: host.to_string(),
+            provider: provider.to_string(),
+            action: "PROTECTED".to_string(),
+            kind: None,
+            country: country.to_string(),
+        };
+        self.push_event(event);
+    }
+
+    pub fn record_intercepted(&self, host: &str, provider: &str, action: &str, country: &str) {
+        self.intercepted_leaks.fetch_add(1, Ordering::SeqCst);
+        let event = RecentGatewayEvent {
+            timestamp: crate::auditor::network::current_timestamp(),
+            host: host.to_string(),
+            provider: provider.to_string(),
+            action: action.to_string(),
+            kind: None,
+            country: country.to_string(),
+        };
+        self.push_event(event);
+    }
+
+    pub fn record_direct_bypassed(&self) {
+        self.direct_bypassed_requests.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn record_direct_bypassed_host(&self, host: &str) {
+        self.direct_bypassed_requests.fetch_add(1, Ordering::SeqCst);
+        let now = crate::auditor::network::current_timestamp();
+        if let Ok(mut g) = self.recent_events.write() {
+            if let Some(last) = g.back_mut() {
+                let is_direct = last.action.eq_ignore_ascii_case("direct")
+                    || last.kind.as_deref().map(|k| k.eq_ignore_ascii_case("direct")).unwrap_or(false);
+                if is_direct && last.host == host {
+                    last.timestamp = now;
+                    return;
+                }
+            }
+            if g.len() >= 20 {
+                g.pop_front();
+            }
+            g.push_back(RecentGatewayEvent {
+                timestamp: now,
+                host: host.to_string(),
+                provider: "Non-AI".to_string(),
+                action: "DIRECT".to_string(),
+                kind: Some("direct".to_string()),
+                country: "DIRECT".to_string(),
+            });
+        }
+    }
+
+    pub fn record_direct_bypassed_with_host(&self, host: &str) {
+        self.record_direct_bypassed_host(host);
+    }
+
+    pub fn enter_tunnel(self: &Arc<Self>) -> TunnelGuard {
+        self.active_ai_tunnels.fetch_add(1, Ordering::SeqCst);
+        TunnelGuard {
+            tracker: Arc::clone(self),
+        }
+    }
+
+    fn push_event(&self, event: RecentGatewayEvent) {
+        if let Ok(mut g) = self.recent_events.write() {
+            if g.len() >= 20 {
+                g.pop_front();
+            }
+            g.push_back(event);
+        }
+    }
+
+    pub async fn snapshot(&self) -> GatewayStatsSnapshot {
+        self.snapshot_sync()
+    }
+
+    pub fn snapshot_sync(&self) -> GatewayStatsSnapshot {
+        let events = self
+            .recent_events
+            .read()
+            .map(|g| g.iter().cloned().collect())
+            .unwrap_or_default();
+        let last_host = self.last_protected_host.read().ok().and_then(|h| h.clone());
+        GatewayStatsSnapshot {
+            protected_ai_requests: self.protected_ai_requests.load(Ordering::SeqCst),
+            intercepted_leaks: self.intercepted_leaks.load(Ordering::SeqCst),
+            direct_bypassed_requests: self.direct_bypassed_requests.load(Ordering::SeqCst),
+            active_ai_tunnels: self.active_ai_tunnels.load(Ordering::SeqCst),
+            uptime_seconds: self.start_time.elapsed().as_secs(),
+            last_protected_host: last_host,
+            recent_events: events,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     inner: Arc<RwLock<AppStateData>>,
     storage_path: Option<PathBuf>,
     save_lock: Arc<tokio::sync::Mutex<()>>,
+    stats: Arc<GatewayStatsTracker>,
 }
 
 impl AppState {
@@ -144,7 +338,18 @@ impl AppState {
             inner: Arc::new(RwLock::new(data)),
             storage_path,
             save_lock: Arc::new(tokio::sync::Mutex::new(())),
+            stats: Arc::new(GatewayStatsTracker::new()),
         }
+    }
+
+    /// Access the live gateway statistics tracker.
+    pub fn stats(&self) -> &Arc<GatewayStatsTracker> {
+        &self.stats
+    }
+
+    /// Returns a live snapshot of gateway statistics.
+    pub async fn get_gateway_stats(&self) -> GatewayStatsSnapshot {
+        self.stats.snapshot().await
     }
 
     /// Creates an in-memory `AppState` initialized with default values.
@@ -265,6 +470,51 @@ impl AppState {
         {
             let mut w = self.inner.write().await;
             w.strict_pinning_enabled = enabled;
+        }
+        self.save_async().await
+    }
+
+    // --- Upstream Proxy Gateway ---
+
+    pub async fn get_upstream_proxy(&self) -> Option<UpstreamProxyConfig> {
+        self.inner.read().await.upstream_proxy.clone()
+    }
+
+    pub async fn set_upstream_proxy(
+        &self,
+        proxy: Option<UpstreamProxyConfig>,
+    ) -> Result<(), StateError> {
+        {
+            let mut w = self.inner.write().await;
+            w.upstream_proxy = proxy;
+        }
+        self.save_async().await
+    }
+
+    // --- Warmup Timer ---
+
+    pub async fn get_warmup_started_at(&self) -> Option<u64> {
+        self.inner.read().await.warmup_started_at
+    }
+
+    pub async fn set_warmup_started_at(&self, started_at: Option<u64>) -> Result<(), StateError> {
+        {
+            let mut w = self.inner.write().await;
+            w.warmup_started_at = started_at;
+        }
+        self.save_async().await
+    }
+
+    // --- Synced AI Timezone (CLI / IDE AI Agent TZ) ---
+
+    pub async fn get_synced_ai_timezone(&self) -> Option<String> {
+        self.inner.read().await.synced_ai_timezone.clone()
+    }
+
+    pub async fn set_synced_ai_timezone(&self, tz: Option<String>) -> Result<(), StateError> {
+        {
+            let mut w = self.inner.write().await;
+            w.synced_ai_timezone = tz;
         }
         self.save_async().await
     }
@@ -604,5 +854,127 @@ mod tests {
         state.block_provider("anthropic").await.unwrap();
         state.clear_blocked_providers().await.unwrap();
         assert!(!state.is_provider_blocked("anthropic").await);
+    }
+
+    #[tokio::test]
+    async fn test_upstream_proxy_and_warmup_timer_state() {
+        let state = AppState::new_in_memory();
+
+        assert_eq!(state.get_upstream_proxy().await, None);
+        assert_eq!(state.get_warmup_started_at().await, None);
+
+        let cfg = UpstreamProxyConfig {
+            enabled: true,
+            raw_key: "socks5://user:pass@127.0.0.1:1080#Custom".to_string(),
+            protocol: "socks5".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 1080,
+            username: Some("user".to_string()),
+            password: Some("pass".to_string()),
+            label: Some("Custom".to_string()),
+        };
+
+        state.set_upstream_proxy(Some(cfg.clone())).await.expect("set upstream proxy");
+        assert_eq!(state.get_upstream_proxy().await, Some(cfg));
+
+        state.set_warmup_started_at(Some(1730000000)).await.expect("set warmup timer");
+        assert_eq!(state.get_warmup_started_at().await, Some(1730000000));
+
+        state.set_upstream_proxy(None).await.expect("clear upstream proxy");
+        assert_eq!(state.get_upstream_proxy().await, None);
+
+        state.set_warmup_started_at(None).await.expect("clear warmup timer");
+        assert_eq!(state.get_warmup_started_at().await, None);
+
+        // Synced AI timezone
+        assert_eq!(state.get_synced_ai_timezone().await, None);
+        state
+            .set_synced_ai_timezone(Some("Europe/Amsterdam".to_string()))
+            .await
+            .expect("set synced ai tz");
+        assert_eq!(
+            state.get_synced_ai_timezone().await,
+            Some("Europe/Amsterdam".to_string())
+        );
+        state
+            .set_synced_ai_timezone(None)
+            .await
+            .expect("clear synced ai tz");
+        assert_eq!(state.get_synced_ai_timezone().await, None);
+    }
+
+    #[tokio::test]
+    async fn test_gateway_stats_tracker() {
+        let state = AppState::new_in_memory();
+        let tracker = state.stats();
+
+        let initial = state.get_gateway_stats().await;
+        assert_eq!(initial.protected_ai_requests, 0);
+        assert_eq!(initial.intercepted_leaks, 0);
+        assert_eq!(initial.direct_bypassed_requests, 0);
+        assert_eq!(initial.active_ai_tunnels, 0);
+        assert!(initial.recent_events.is_empty());
+
+        // Increment direct bypass
+        tracker.record_direct_bypassed();
+        assert_eq!(state.get_gateway_stats().await.direct_bypassed_requests, 1);
+
+        // Record protected events
+        tracker.record_protected("api.anthropic.com", "anthropic", "GB");
+        let snap1 = state.get_gateway_stats().await;
+        assert_eq!(snap1.protected_ai_requests, 1);
+        assert_eq!(snap1.last_protected_host.as_deref(), Some("api.anthropic.com"));
+        assert_eq!(snap1.recent_events.len(), 1);
+        assert_eq!(snap1.recent_events[0].action, "PROTECTED");
+        assert_eq!(snap1.recent_events[0].host, "api.anthropic.com");
+
+        // Record intercepted leak
+        tracker.record_intercepted("api.openai.com", "openai", "HELD", "TR");
+        let snap2 = state.get_gateway_stats().await;
+        assert_eq!(snap2.intercepted_leaks, 1);
+        assert_eq!(snap2.recent_events.len(), 2);
+        assert_eq!(snap2.recent_events[1].action, "HELD");
+
+        // Test active tunnel RAII guard
+        {
+            let guard = tracker.enter_tunnel();
+            assert_eq!(state.get_gateway_stats().await.active_ai_tunnels, 1);
+            drop(guard);
+        }
+        assert_eq!(state.get_gateway_stats().await.active_ai_tunnels, 0);
+
+        // Test ring buffer caps at 20 events
+        for i in 0..25 {
+            tracker.record_protected(&format!("host-{i}.ai"), "gemini", "US");
+        }
+        let snap3 = state.get_gateway_stats().await;
+        assert_eq!(snap3.recent_events.len(), 20);
+        assert_eq!(snap3.recent_events.last().unwrap().host, "host-24.ai");
+
+        // Test direct bypass recording and deduplication
+        let prev_direct = snap3.direct_bypassed_requests;
+        tracker.record_direct_bypassed_host("api.github.com");
+        let snap4 = state.get_gateway_stats().await;
+        assert_eq!(snap4.direct_bypassed_requests, prev_direct + 1);
+        let last_ev = snap4.recent_events.last().unwrap();
+        assert_eq!(last_ev.host, "api.github.com");
+        assert_eq!(last_ev.provider, "Non-AI");
+        assert_eq!(last_ev.action, "DIRECT");
+        assert_eq!(last_ev.country, "DIRECT");
+        assert_eq!(last_ev.kind.as_deref(), Some("direct"));
+        let count_events = snap4.recent_events.len();
+
+        // Same host called again -> deduplication updates timestamp without increasing queue length
+        tracker.record_direct_bypassed_host("api.github.com");
+        let snap5 = state.get_gateway_stats().await;
+        assert_eq!(snap5.direct_bypassed_requests, prev_direct + 2);
+        assert_eq!(snap5.recent_events.len(), count_events);
+        assert_eq!(snap5.recent_events.last().unwrap().host, "api.github.com");
+
+        // Different non-AI host -> appends new event
+        tracker.record_direct_bypassed_host("registry.npmjs.org");
+        let snap6 = state.get_gateway_stats().await;
+        assert_eq!(snap6.direct_bypassed_requests, prev_direct + 3);
+        assert_eq!(snap6.recent_events.last().unwrap().host, "registry.npmjs.org");
     }
 }
