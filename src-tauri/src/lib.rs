@@ -573,6 +573,11 @@ async fn sync_ai_agents_timezone(
     if tz_clean.is_empty() {
         return Err("Указан пустой часовой пояс".to_string());
     }
+    if sysproxy::sanitize_timezone(&tz_clean).is_none() {
+        return Err(format!(
+            "Некорректный часовой пояс: {tz_clean}. Ожидается IANA-имя вида Europe/Amsterdam"
+        ));
+    }
 
     state
         .set_synced_ai_timezone(Some(tz_clean.clone()))
