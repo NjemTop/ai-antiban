@@ -13,7 +13,6 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager,
 };
-use tauri_plugin_opener::OpenerExt;
 
 pub const MAIN_TRAY_ID: &str = "main-tray";
 
@@ -1004,13 +1003,6 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
-            let support_i = MenuItem::with_id(
-                app,
-                "support",
-                "💬 Поддержка в Telegram: @nomadnocode",
-                true,
-                None::<&str>,
-            )?;
             let update_i = MenuItem::with_id(
                 app,
                 "check_updates",
@@ -1042,7 +1034,6 @@ pub fn run() {
                     &pin_i,
                     &rescan_i,
                     &guide_i,
-                    &support_i,
                     &update_i,
                     &sep2,
                     &quit_i,
@@ -1130,9 +1121,6 @@ pub fn run() {
                             let _ = win.set_focus();
                             let _ = app.emit("interceptor://open-guide", "01-personal-vpn-15min");
                         }
-                    }
-                    "support" => {
-                        let _ = app.opener().open_url("https://t.me/nomadnocode", None::<&str>);
                     }
                     "check_updates" => {
                         if let Some(win) = app.get_webview_window("main") {

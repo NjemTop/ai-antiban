@@ -11,9 +11,9 @@
 
 ### Шаг 1. Арендуйте чистый VPS за $1–$4/мес
 
-1. 🥇 **[HostVDS](https://hostvds.com/?affiliate_uuid=3d2b6c0c-5d99-4065-9d37-a941a46e9282)** — самый выгодный зарубежный VPS от ~$0.99/мес (`NL`, `FI`, `US`), чистые статические IPv4 + `/64` IPv6 подсети.
-2. 🥈 **[is*hosting](https://ishosting.com/affiliate/ODA5NyM4)** — премиальные VPS в 35+ странах (`NL`, `DE`, `US`), идеальный ASN для Stripe и Claude.
-3. 🥉 **[Timeweb Cloud](https://timeweb.cloud/?i=138893)** — моментальная оплата картами РФ / СБП, серверы в Амстердаме и Франкфурте.
+1. 🥇 **[HostVDS](https://hostvds.com/)** — самый выгодный зарубежный VPS от ~$0.99/мес (`NL`, `FI`, `US`), чистые статические IPv4 + `/64` IPv6 подсети.
+2. 🥈 **[is*hosting](https://ishosting.com/)** — премиальные VPS в 35+ странах (`NL`, `DE`, `US`), идеальный ASN для Stripe и Claude.
+3. 🥉 **[Timeweb Cloud](https://timeweb.cloud/)** — моментальная оплата картами РФ / СБП, серверы в Амстердаме и Франкфурте.
 
 > **Что выбрать при заказе на сайте хостинга:**
 > * **ОС:** `Ubuntu 24.04 LTS` (или `Ubuntu 22.04 LTS`).
