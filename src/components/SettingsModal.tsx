@@ -37,7 +37,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleOpenGitHub = async () => {
-    await openExternal("https://github.com/kingbest1195/ai-antiban");
+    await openExternal("https://github.com/NjemTop/ai-antiban");
   };
 
   return (
