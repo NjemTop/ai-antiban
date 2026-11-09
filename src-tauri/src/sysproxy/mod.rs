@@ -1615,7 +1615,7 @@ mod tests {
         assert_eq!(parse_reg_query_value(other, "HTTP_PROXY"), None);
     }
 
-    fn env_lookup(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + '_ {
+    fn env_lookup<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
         move |name: &str| {
             vars.iter()
                 .find(|(k, _)| k.eq_ignore_ascii_case(name))
