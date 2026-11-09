@@ -1,5 +1,4 @@
 import React, { useState } from "react";
-import { isTauri } from "@tauri-apps/api/core";
 import {
   Key,
   Server,
@@ -7,15 +6,12 @@ import {
   Play,
   Pause,
   Trash2,
-  Send,
   Zap,
   ChevronRight,
-  Sparkles,
   CheckCircle2,
 } from "lucide-react";
 import { AppStateData } from "../types";
 import { clearUpstreamProxy, setUpstreamProxy, toggleUpstreamProxy } from "../utils/api";
-import { openTelegramSupport } from "../utils/opener";
 
 interface CleanIpTabProps {
   state: AppStateData | null;
@@ -105,12 +101,6 @@ export const CleanIpTab: React.FC<CleanIpTabProps> = ({
     }
   };
 
-  const handleUseDemoKey = () => {
-    const demo = "socks5://u20473:demo_pass@185.10.10.1:1080#Zastava 2-Hop (NL)";
-    setInputKey(demo);
-    handleConnect(demo);
-  };
-
   return (
     <div className="space-y-3.5 animate-in fade-in duration-150">
       {/* Block 1: Zastava Gateway Key */}
@@ -147,7 +137,7 @@ export const CleanIpTab: React.FC<CleanIpTabProps> = ({
         {/* Plain Russian explanation for developers and vibe-coders */}
         <p className="text-[11px] text-zinc-300 leading-relaxed font-sans">
           Направляет трафик <strong className="text-zinc-100 font-semibold">Claude, ChatGPT, Gemini и Cursor</strong> через
-          чистый выделенный IP (Нидерланды / Германия / США). Весь остальной интернет на компьютере (банки РФ, рабочие
+          ваш собственный сервер (VPS) по ключу socks5:// или http://. Весь остальной интернет на компьютере (банки РФ, рабочие
           сайты, загрузки) работает напрямую на максимальной скорости.
         </p>
 
@@ -242,41 +232,9 @@ export const CleanIpTab: React.FC<CleanIpTabProps> = ({
               </button>
             </div>
 
-            {!isTauri() && (
-              <div className="flex items-center justify-between pt-0.5 text-[10px]">
-                <span className="text-zinc-500">Режим браузерного превью:</span>
-                <button
-                  type="button"
-                  onClick={handleUseDemoKey}
-                  className="text-emerald-400 hover:text-emerald-300 font-mono font-medium hover:underline cursor-pointer flex items-center gap-1"
-                >
-                  <Sparkles className="w-2.5 h-2.5" />
-                  <span>Вставить тестовый ключ (NL 2-Hop)</span>
-                </button>
-              </div>
-            )}
           </div>
         )}
 
-        {/* Clean Telegram Helper Card */}
-        <div className="rounded-lg bg-sky-500/5 border border-sky-500/20 p-2.5 flex items-center justify-between gap-2.5">
-          <div className="space-y-0.5 min-w-0">
-            <div className="text-[11px] font-semibold text-sky-200">
-              Нужен готовый чистый IP для Claude и ChatGPT?
-            </div>
-            <div className="text-[10px] text-zinc-400 leading-snug">
-              Статический сервер в Нидерландах без спам-баз и с гарантией разблокировки.
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => openTelegramSupport()}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-sky-500 hover:bg-sky-400 text-zinc-950 font-bold text-[10.5px] cursor-pointer transition-colors shrink-0"
-          >
-            <Send className="w-3 h-3 text-zinc-950" />
-            <span>Получить ключ</span>
-          </button>
-        </div>
       </section>
 
       {/* Block 2: Personal VPS for Free */}

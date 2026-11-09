@@ -11,7 +11,6 @@ import {
   Check,
   CheckCircle2,
   ChevronRight,
-  Send,
   Terminal,
   Download,
   ExternalLink,
@@ -77,7 +76,7 @@ import { ToastContainer, ToastMessage } from "./Toast";
 import { SettingsModal } from "./SettingsModal";
 import { ClaudeProfilesCard } from "./ClaudeProfilesCard";
 import { VpnCrashTestModal } from "./VpnCrashTestModal";
-import { openExternal, openTelegramSupport } from "../utils/opener";
+import { openExternal } from "../utils/opener";
 
 type ActiveTab = "pulse" | "clean-ip" | "bin" | "audit" | "guide";
 
@@ -184,7 +183,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   // v1.2.0: Settings and Crash Test Modals
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [showCrashTestModal, setShowCrashTestModal] = useState<boolean>(false);
-  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean>(true);
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean>(false);
 
   const [updaterStatus, setUpdaterStatus] = useState<UpdateStatusPayload | null>(null);
   const [showChangelog, setShowChangelog] = useState<boolean>(false);
@@ -736,11 +735,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
     activeReport?.timezone_result?.status === "yellow" ||
     activeReport?.timezone_result?.status === "red";
 
-  const handleOpenSupport = async () => {
-    showToast("Связь / Поддержка", "Переход в Telegram: @nomadnocode", "info");
-    await openTelegramSupport();
-  };
-
   return (
     <div className="w-full max-w-[460px] min-h-[660px] bg-[#0A0B0E] text-zinc-100 flex flex-col justify-between p-3.5 select-none font-sans border border-white/[0.08] rounded-xl shadow-2xl relative">
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
@@ -823,16 +817,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
               className="p-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-zinc-400 hover:text-white transition-colors cursor-pointer"
             >
               <Settings className="w-3.5 h-3.5" />
-            </button>
-
-            <button
-              type="button"
-              onClick={handleOpenSupport}
-              title="Связь и поддержка в Telegram: @nomadnocode"
-              className="flex items-center gap-1 px-1.5 py-1 rounded-md bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/25 text-[10px] font-sans font-medium text-sky-300 hover:text-sky-200 transition-colors cursor-pointer"
-            >
-              <Send className="w-2.5 h-2.5 text-sky-400" />
-              <span>ТГ</span>
             </button>
 
             <button
@@ -1818,15 +1802,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
           >
             <Download className="w-2.5 h-2.5" />
             <span>{checkingUpdate ? "Проверка..." : updateInfo?.update_available ? `Обновить (v${updateInfo.latest_version})` : "Обновления"}</span>
-          </button>
-          <button
-            type="button"
-            onClick={handleOpenSupport}
-            className="flex items-center gap-1 text-sky-400/90 hover:text-sky-300 transition-colors font-medium cursor-pointer hover:underline"
-            title="Связь и поддержка в Telegram: @nomadnocode"
-          >
-            <Send className="w-2.5 h-2.5 text-sky-400" />
-            <span>@nomadnocode</span>
           </button>
         </div>
       </footer>

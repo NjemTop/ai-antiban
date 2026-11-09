@@ -4,7 +4,8 @@ use std::time::Duration;
 use tauri::Emitter;
 use tokio::io::AsyncWriteExt;
 
-pub const GITHUB_REPO: &str = "kingbest1195/ai-antiban";
+/// Releases of the personal fork (built by its own GitHub Actions), not the upstream repo.
+pub const GITHUB_REPO: &str = "NjemTop/ai-antiban";
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -575,7 +576,7 @@ mod tests {
     #[test]
     fn test_download_url_allowlist() {
         assert!(validate_download_url(
-            "https://github.com/kingbest1195/ai-antiban/releases/download/v1.0.4/Zastava_universal.app.tar.gz"
+            "https://github.com/NjemTop/ai-antiban/releases/download/v1.0.4/Zastava_universal.app.tar.gz"
         )
         .is_ok());
         assert!(validate_download_url(

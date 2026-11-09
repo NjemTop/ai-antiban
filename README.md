@@ -9,7 +9,7 @@
   [![Platform](https://img.shields.io/badge/Платформы-macOS%20%7C%20Windows-18181b?style=flat-square)](#сборка-и-запуск-из-исходного-кода)
   [![Engine](https://img.shields.io/badge/Ядро-Rust%20%2B%20Tauri%20v2-f59e0b?style=flat-square)](src-tauri/)
   [![Privacy](https://img.shields.io/badge/Приватность-Без%20чтения%20чатов%20%7C%20100%25%20Локально-10b981?style=flat-square)](#архитектура-безопасности-сквозной-tls-туннель)
-  [![Release](https://img.shields.io/github/v/release/kingbest1195/ai-antiban?style=flat-square&color=38bdf8&label=Релиз)](https://github.com/kingbest1195/ai-antiban/releases/latest)
+  [![Release](https://img.shields.io/github/v/release/NjemTop/ai-antiban?style=flat-square&color=38bdf8&label=Релиз)](https://github.com/NjemTop/ai-antiban/releases/latest)
 
   <p align="center">
     <a href="#скачать-готовые-сборки"><b>Скачать сборку</b></a> ·
@@ -21,14 +21,16 @@
   </p>
 </div>
 
+> **Личный форк** [kingbest1195/ai-antiban](https://github.com/kingbest1195/ai-antiban). Отличия: без рекламы и реферальных ссылок; прокси не пишется в постоянный `HKCU\Environment` (блок в PowerShell-профиле включается только при живом порте), остатки чистятся при выходе и в деинсталляторе (`Zastava.exe --cleanup`); автообновление выключено по умолчанию и смотрит на релизы этого форка. Апстрим — только свой VPS через ключ `socks5://user:pass@host:port#Label` или `http://...`.
+
 ---
 
 ## Скачать готовые сборки
 
 Все установочные пакеты компилируются автоматически через открытый GitHub Actions Workflow:
 
-- **macOS (Apple Silicon M1/M2/M3/M4 и Intel x86_64)**: [Скачать Universal .dmg (последний релиз)](https://github.com/kingbest1195/ai-antiban/releases/latest) (скачайте и перетащите в папку Applications).
-- **Windows (x64)**: [Скачать установщик .exe или .msi (последний релиз)](https://github.com/kingbest1195/ai-antiban/releases/latest).
+- **macOS (Apple Silicon M1/M2/M3/M4 и Intel x86_64)**: [Скачать Universal .dmg (последний релиз)](https://github.com/NjemTop/ai-antiban/releases/latest) (скачайте и перетащите в папку Applications).
+- **Windows (x64)**: [Скачать установщик .exe или .msi (последний релиз)](https://github.com/NjemTop/ai-antiban/releases/latest).
 - **Встроенное автообновление**: если у вас уже установлена Застава, нажмите кнопку «Обновления» внутри приложения для фоновой установки в 1 клик (или настройте автообновление через окно настроек).
 
 ---
@@ -124,7 +126,7 @@
 
 ```bash
 # 1. Клонирование репозитория
-git clone https://github.com/kingbest1195/ai-antiban.git
+git clone https://github.com/NjemTop/ai-antiban.git
 cd ai-antiban
 
 # 2. Установка зависимостей интерфейса

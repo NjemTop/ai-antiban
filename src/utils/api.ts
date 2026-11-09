@@ -28,7 +28,7 @@ let mockState: AppStateData = {
   upstream_proxy: null,
   warmup_started_at: null,
   synced_ai_timezone: null,
-  auto_update_enabled: true,
+  auto_update_enabled: false,
 };
 
 export type MockScenario = "clean" | "turkey" | "ru";
@@ -455,7 +455,7 @@ export async function checkForUpdates(): Promise<UpdateCheckResult> {
     update_available: false,
     release_name: "Zastava v1.2.0: Multi-Account Isolator & Live VPN Crash-Test",
     release_notes: "Релиз v1.2.0: изоляция мульти-аккаунтов Claude, боевой краш-тест VPN, исправление мигания окон Windows 11.",
-    release_url: "https://github.com/kingbest1195/ai-antiban/releases",
+    release_url: "https://github.com/NjemTop/ai-antiban/releases",
   };
 }
 

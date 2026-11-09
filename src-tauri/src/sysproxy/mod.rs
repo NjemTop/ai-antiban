@@ -111,27 +111,93 @@ pub fn disable_all_sysproxy() {
 
     #[cfg(target_os = "windows")]
     {
-        // On Windows remove HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings\AutoConfigURL
-        let _ = silent_command("reg")
-            .args([
-                "delete",
-                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-                "/v",
-                "AutoConfigURL",
-                "/f",
-            ])
-            .output();
-        notify_windows_inet_refresh();
+        // Remove HKCU\...\Internet Settings\AutoConfigURL, but only when it still points to
+        // Zastava's local PAC: a corporate / user PAC configured afterwards must survive.
+        remove_windows_pac_if_zastava();
     }
 
+    // Full cleanup (runtime JSON settings + PowerShell / shell profile blocks + legacy
+    // HKCU\Environment values), so nothing keeps pointing at a dead 127.0.0.1:8899
+    // after Zastava exits. Everything is re-applied on the next start.
     if CLI_PROTECTION_ACTIVE.swap(false, Ordering::SeqCst) {
-        disable_cli_and_ide_runtime_settings();
+        remove_cli_and_ide_protection();
     }
 
     SYS_PROXY_ACTIVE.store(false, Ordering::SeqCst);
     if let Ok(mut g) = LAST_PAC_URL.lock() {
         *g = None;
     }
+}
+
+/// Removes every persistent trace Zastava may have left in the OS, regardless of the
+/// in-memory flags of the current process. Used by `zastava --cleanup` (invoked by the
+/// NSIS uninstaller) to recover after the app was killed, crashed or got uninstalled
+/// while running. Only values that point to Zastava's local proxy are touched.
+pub fn cleanup_all_persistent_settings() {
+    #[cfg(target_os = "macos")]
+    {
+        disable_all_sysproxy();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        remove_windows_pac_if_zastava();
+    }
+
+    CLI_PROTECTION_ACTIVE.store(false, Ordering::SeqCst);
+    remove_cli_and_ide_protection();
+    SYS_PROXY_ACTIVE.store(false, Ordering::SeqCst);
+}
+
+#[cfg(target_os = "windows")]
+const WININET_SETTINGS_KEY: &str =
+    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+
+#[cfg(target_os = "windows")]
+fn remove_windows_pac_if_zastava() {
+    let current = read_windows_reg_string(WININET_SETTINGS_KEY, "AutoConfigURL");
+    if current.as_deref().map(is_zastava_local_proxy_val).unwrap_or(false) {
+        let _ = silent_command("reg")
+            .args(["delete", WININET_SETTINGS_KEY, "/v", "AutoConfigURL", "/f"])
+            .output();
+    }
+    notify_windows_inet_refresh();
+}
+
+/// Reads a string value via `reg query`. Returns `None` when the value does not exist.
+#[cfg(target_os = "windows")]
+fn read_windows_reg_string(key: &str, name: &str) -> Option<String> {
+    let output = silent_command("reg")
+        .args(["query", key, "/v", name])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_reg_query_value(&String::from_utf8_lossy(&output.stdout), name)
+}
+
+/// Extracts the data of `name` from `reg query <key> /v <name>` output, e.g.
+/// `    HTTP_PROXY    REG_SZ    http://127.0.0.1:8899`.
+pub fn parse_reg_query_value(stdout: &str, name: &str) -> Option<String> {
+    for line in stdout.lines() {
+        let trimmed = line.trim_start();
+        let Some(head) = trimmed.get(..name.len()) else {
+            continue;
+        };
+        if !head.eq_ignore_ascii_case(name) {
+            continue;
+        }
+        let rest = &trimmed[name.len()..];
+        for reg_type in ["REG_EXPAND_SZ", "REG_SZ"] {
+            if let Some(idx) = rest.find(reg_type) {
+                if rest[..idx].trim().is_empty() {
+                    return Some(rest[idx + reg_type.len()..].trim().to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Enables systemic PAC proxy with the given PAC URL (e.g. "http://127.0.0.1:8899/proxy.pac").
@@ -370,6 +436,21 @@ pub fn build_shell_rc_guard_block(proxy_url: &str, port: u16) -> String {
     build_shell_rc_guard_block_with_tz(proxy_url, port, None)
 }
 
+/// Validates an IANA timezone name (e.g. `Europe/Amsterdam`, `Etc/GMT+3`) before it is
+/// interpolated into shell / PowerShell profiles. The value may come from an external
+/// geo-IP API or from the UI, so anything outside `[A-Za-z0-9_+-/]` is rejected to rule
+/// out code injection into the user's profile scripts.
+pub fn sanitize_timezone(tz: &str) -> Option<String> {
+    let trimmed = tz.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 {
+        return None;
+    }
+    let valid = trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+'));
+    if valid { Some(trimmed.to_string()) } else { None }
+}
+
 /// Builds the shell RC block including optional timezone and clean UTF-8 locale sync.
 pub fn build_shell_rc_guard_block_with_tz(
     proxy_url: &str,
@@ -377,13 +458,10 @@ pub fn build_shell_rc_guard_block_with_tz(
     tz: Option<&str>,
 ) -> String {
     let mut tz_exports = String::new();
-    if let Some(timezone) = tz {
-        let trimmed_tz = timezone.trim();
-        if !trimmed_tz.is_empty() {
-            tz_exports = format!(
-                "\n  export TZ=\"{trimmed_tz}\"\n  export LANG=\"en_US.UTF-8\"\n  export LC_TIME=\"en_US.UTF-8\"\n  export LC_ALL=\"en_US.UTF-8\""
-            );
-        }
+    if let Some(trimmed_tz) = tz.and_then(sanitize_timezone) {
+        tz_exports = format!(
+            "\n  export TZ=\"{trimmed_tz}\"\n  export LANG=\"en_US.UTF-8\"\n  export LC_TIME=\"en_US.UTF-8\"\n  export LC_ALL=\"en_US.UTF-8\""
+        );
     }
     format!(
         "{start}\nif command -v nc >/dev/null 2>&1 && nc -z 127.0.0.1 {port} >/dev/null 2>&1; then\n  export HTTP_PROXY=\"{url}\"\n  export HTTPS_PROXY=\"{url}\"\n  export ALL_PROXY=\"{url}\"\n  export http_proxy=\"{url}\"\n  export https_proxy=\"{url}\"\n  export all_proxy=\"{url}\"\n  export NO_PROXY=\"{no_proxy}\"\n  export no_proxy=\"{no_proxy}\"{tz_exports}\nfi\n{end}",
@@ -397,23 +475,45 @@ pub fn build_shell_rc_guard_block_with_tz(
 }
 
 /// Builds the PowerShell profile block with proxy settings and optional timezone/locale.
+///
+/// Like the `nc -z` check in the shell block, the variables are only set when something is
+/// actually listening on `127.0.0.1:<port>` (checked via the local TCP listener table, which
+/// is instant and does not open a connection). If Zastava was closed, killed or uninstalled,
+/// new PowerShell sessions simply work without a proxy instead of pointing at a dead port.
+/// All values are session-scoped (`$env:`), nothing is persisted in `HKCU\Environment`.
 pub fn build_powershell_guard_block_with_tz(
     proxy_url: &str,
     tz: Option<&str>,
 ) -> String {
+    let (_, port) = normalize_proxy_url_and_port(proxy_url);
     let mut block = format!(
-        "{start}\n$env:HTTP_PROXY = \"{url}\"\n$env:HTTPS_PROXY = \"{url}\"\n$env:ALL_PROXY = \"{url}\"\n$env:http_proxy = \"{url}\"\n$env:https_proxy = \"{url}\"\n$env:all_proxy = \"{url}\"\n$env:NO_PROXY = \"{no_proxy}\"\n$env:no_proxy = \"{no_proxy}\"\n$env:LANG = \"en_US.UTF-8\"\n$env:LC_TIME = \"en_US.UTF-8\"\n$env:LC_ALL = \"en_US.UTF-8\"",
+        "{start}\n\
+$__zastavaUp = $false\n\
+try {{ $__zastavaUp = [bool]([System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object {{ $_.Port -eq {port} }}) }} catch {{ }}\n\
+if ($__zastavaUp) {{\n  \
+$env:HTTP_PROXY = \"{url}\"\n  \
+$env:HTTPS_PROXY = \"{url}\"\n  \
+$env:ALL_PROXY = \"{url}\"\n  \
+$env:http_proxy = \"{url}\"\n  \
+$env:https_proxy = \"{url}\"\n  \
+$env:all_proxy = \"{url}\"\n  \
+$env:NO_PROXY = \"{no_proxy}\"\n  \
+$env:no_proxy = \"{no_proxy}\"\n  \
+$env:LANG = \"en_US.UTF-8\"\n  \
+$env:LC_TIME = \"en_US.UTF-8\"\n  \
+$env:LC_ALL = \"en_US.UTF-8\"",
         start = ZASTAVA_RC_START,
+        port = port,
         url = proxy_url,
         no_proxy = NO_PROXY_VALUE,
     );
-    if let Some(timezone) = tz {
-        let trimmed = timezone.trim();
-        if !trimmed.is_empty() {
-            block.push_str(&format!("\n$env:TZ = \"{trimmed}\""));
-        }
+    if let Some(timezone) = tz.and_then(sanitize_timezone) {
+        block.push_str(&format!("\n  $env:TZ = \"{timezone}\""));
     }
-    block.push_str(&format!("\n{end}", end = ZASTAVA_RC_END));
+    block.push_str(&format!(
+        "\n}}\nRemove-Variable -Name __zastavaUp -ErrorAction SilentlyContinue\n{end}",
+        end = ZASTAVA_RC_END
+    ));
     block
 }
 
@@ -461,19 +561,75 @@ pub fn get_windows_powershell_profile_paths() -> Vec<PathBuf> {
 }
 
 #[cfg(target_os = "windows")]
-pub fn set_windows_user_env_var(name: &str, value: &str) -> std::io::Result<()> {
-    silent_command("reg")
-        .args(["add", r"HKCU\Environment", "/v", name, "/t", "REG_SZ", "/d", value, "/f"])
-        .output()?;
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
 pub fn delete_windows_user_env_var(name: &str) -> std::io::Result<()> {
     let _ = silent_command("reg")
         .args(["delete", r"HKCU\Environment", "/v", name, "/f"])
         .output();
     Ok(())
+}
+
+/// Proxy-related variables older Zastava versions persisted in `HKCU\Environment`.
+/// (Windows env var names are case-insensitive, so lowercase variants are the same values.)
+const LEGACY_PROXY_ENV_VARS: [&str; 3] = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"];
+/// Locale / timezone variables older Zastava versions persisted alongside the proxy.
+const LEGACY_LOCALE_ENV_VARS: [&str; 3] = ["LANG", "LC_TIME", "LC_ALL"];
+
+/// Decides which `HKCU\Environment` values were written by an older Zastava version and must
+/// be removed. `lookup(name)` returns the current value of a variable.
+///
+/// Older versions wrote `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY=http://127.0.0.1:8899`,
+/// `NO_PROXY`, `LANG/LC_TIME=en_US.UTF-8` and an IANA `TZ` permanently, so after a kill /
+/// uninstall every program kept using a dead proxy. Values the user set themselves are kept:
+/// proxy vars are removed only when they point to Zastava's local port, and locale / TZ only
+/// when a Zastava proxy value or Zastava's exact `NO_PROXY` list proves they came from us.
+pub fn legacy_zastava_env_vars_to_remove<F>(lookup: F) -> Vec<&'static str>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut to_remove = Vec::new();
+    let mut zastava_marker = false;
+
+    for name in LEGACY_PROXY_ENV_VARS {
+        if lookup(name).as_deref().map(is_zastava_local_proxy_val).unwrap_or(false) {
+            to_remove.push(name);
+            zastava_marker = true;
+        }
+    }
+    if lookup("NO_PROXY").as_deref().map(str::trim) == Some(NO_PROXY_VALUE) {
+        to_remove.push("NO_PROXY");
+        zastava_marker = true;
+    }
+
+    if zastava_marker {
+        for name in LEGACY_LOCALE_ENV_VARS {
+            if lookup(name).as_deref().map(str::trim) == Some("en_US.UTF-8") {
+                to_remove.push(name);
+            }
+        }
+        // Zastava wrote IANA names (`Europe/Amsterdam`); the Windows CRT expects POSIX-like
+        // `EST5EDT`, so an IANA TZ in the user environment is both ours and harmful.
+        if lookup("TZ").map(|v| v.contains('/')).unwrap_or(false) {
+            to_remove.push("TZ");
+        }
+    }
+
+    to_remove
+}
+
+/// Removes values an older Zastava version left in `HKCU\Environment` (see
+/// [`legacy_zastava_env_vars_to_remove`]). Returns the names that were removed.
+#[cfg(target_os = "windows")]
+pub fn cleanup_legacy_windows_user_env() -> Vec<&'static str> {
+    let removed = legacy_zastava_env_vars_to_remove(|name| {
+        read_windows_reg_string(r"HKCU\Environment", name)
+    });
+    for name in &removed {
+        let _ = delete_windows_user_env_var(name);
+    }
+    if !removed.is_empty() {
+        broadcast_windows_env_change();
+    }
+    removed
 }
 
 #[cfg(target_os = "windows")]
@@ -968,6 +1124,8 @@ pub fn enable_cli_and_ide_protection_with_tz(
     tz: Option<&str>,
 ) -> CliProtectionReport {
     let (proxy_url, _port) = normalize_proxy_url_and_port(proxy_addr_or_url);
+    let tz_sanitized = tz.and_then(sanitize_timezone);
+    let tz = tz_sanitized.as_deref();
     let mut configured_targets = Vec::new();
 
     #[cfg(target_os = "macos")]
@@ -1034,33 +1192,14 @@ pub fn enable_cli_and_ide_protection_with_tz(
             }
         }
 
-        // 3b. Windows User Environment & PowerShell Profiles
+        // 3b. Windows: PowerShell profiles only.
+        // The proxy is deliberately NOT written to the persistent user environment
+        // (HKCU\Environment): it has no liveness check, so after a kill / crash / uninstall
+        // every program kept using a dead 127.0.0.1:8899. Values left by older versions
+        // are migrated away here.
         #[cfg(target_os = "windows")]
         {
-            let vars = [
-                ("HTTP_PROXY", proxy_url.as_str()),
-                ("HTTPS_PROXY", proxy_url.as_str()),
-                ("ALL_PROXY", proxy_url.as_str()),
-                ("NO_PROXY", NO_PROXY_VALUE),
-                ("LANG", "en_US.UTF-8"),
-                ("LC_TIME", "en_US.UTF-8"),
-            ];
-            let mut reg_ok = false;
-            for (k, v) in vars {
-                if set_windows_user_env_var(k, v).is_ok() {
-                    reg_ok = true;
-                }
-            }
-            if let Some(timezone) = tz {
-                let trimmed = timezone.trim();
-                if !trimmed.is_empty() {
-                    let _ = set_windows_user_env_var("TZ", trimmed);
-                }
-            }
-            broadcast_windows_env_change();
-            if reg_ok {
-                configured_targets.push("Windows Реестр (HKCU\\Environment)".to_string());
-            }
+            let _ = cleanup_legacy_windows_user_env();
 
             let mut ps_configured = false;
             for ps_path in get_windows_powershell_profile_paths() {
@@ -1166,6 +1305,12 @@ pub fn remove_shell_rc_block(existing: &str) -> String {
 
 pub fn disable_cli_protection() {
     CLI_PROTECTION_ACTIVE.store(false, Ordering::SeqCst);
+    remove_cli_and_ide_protection();
+}
+
+/// Removes every CLI / IDE protection artifact: runtime JSON settings, shell / PowerShell
+/// profile blocks and values older versions persisted in `HKCU\Environment`.
+fn remove_cli_and_ide_protection() {
     disable_cli_and_ide_runtime_settings();
     if let Some(home) = user_home_dir() {
         for rc_name in [".zshenv", ".zshrc", ".bash_profile"] {
@@ -1183,23 +1328,8 @@ pub fn disable_cli_protection() {
 
     #[cfg(target_os = "windows")]
     {
-        for var_name in [
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "ALL_PROXY",
-            "NO_PROXY",
-            "http_proxy",
-            "https_proxy",
-            "all_proxy",
-            "no_proxy",
-            "TZ",
-            "LANG",
-            "LC_TIME",
-            "LC_ALL",
-        ] {
-            let _ = delete_windows_user_env_var(var_name);
-        }
-        broadcast_windows_env_change();
+        // Only values Zastava itself wrote are removed: the user's own LANG / TZ / proxy stay.
+        let _ = cleanup_legacy_windows_user_env();
 
         for ps_path in get_windows_powershell_profile_paths() {
             if ps_path.exists() {
@@ -1426,6 +1556,114 @@ mod tests {
         assert!(!cleaned.contains(ZASTAVA_RC_START));
         assert!(!cleaned.contains("Europe/Berlin"));
         assert!(cleaned.contains("Write-Host 'Welcome'"));
+    }
+
+    #[test]
+    fn test_powershell_block_has_liveness_check() {
+        let block = build_powershell_guard_block_with_tz("http://127.0.0.1:8900", None);
+        // Proxy vars are only set when something listens on the gateway port
+        assert!(block.contains("GetActiveTcpListeners()"));
+        assert!(block.contains("$_.Port -eq 8900"));
+        let guard_idx = block.find("if ($__zastavaUp) {").expect("liveness guard");
+        let proxy_idx = block.find("$env:HTTPS_PROXY").expect("proxy var");
+        assert!(guard_idx < proxy_idx);
+        assert!(block.contains("Remove-Variable -Name __zastavaUp"));
+        // Nothing is persisted into the user environment from the profile
+        assert!(!block.contains("SetEnvironmentVariable"));
+        assert!(block.starts_with(ZASTAVA_RC_START));
+        assert!(block.ends_with(ZASTAVA_RC_END));
+        // Braces are balanced (block parses as valid PowerShell structure)
+        assert_eq!(block.matches('{').count(), block.matches('}').count());
+    }
+
+    #[test]
+    fn test_sanitize_timezone() {
+        assert_eq!(sanitize_timezone(" Europe/Amsterdam "), Some("Europe/Amsterdam".into()));
+        assert_eq!(sanitize_timezone("America/Argentina/Buenos_Aires"), Some("America/Argentina/Buenos_Aires".into()));
+        assert_eq!(sanitize_timezone("Etc/GMT+3"), Some("Etc/GMT+3".into()));
+        assert_eq!(sanitize_timezone("UTC"), Some("UTC".into()));
+        assert_eq!(sanitize_timezone(""), None);
+        assert_eq!(sanitize_timezone("Europe/Amsterdam\"; Remove-Item ~ -Recurse; \""), None);
+        assert_eq!(sanitize_timezone("$(rm -rf ~)"), None);
+        assert_eq!(sanitize_timezone("Europe/Amsterdam\nexport X=1"), None);
+        assert_eq!(sanitize_timezone(&"A".repeat(65)), None);
+    }
+
+    #[test]
+    fn test_injected_timezone_is_dropped_from_profiles() {
+        let evil = "Europe/Paris\"; Invoke-Expression 'calc'; \"";
+        let ps = build_powershell_guard_block_with_tz("http://127.0.0.1:8899", Some(evil));
+        assert!(!ps.contains("Invoke-Expression"));
+        assert!(!ps.contains("$env:TZ"));
+        let sh = build_shell_rc_guard_block_with_tz("http://127.0.0.1:8899", 8899, Some("$(id)"));
+        assert!(!sh.contains("$(id)"));
+        assert!(!sh.contains("export TZ"));
+    }
+
+    #[test]
+    fn test_parse_reg_query_value() {
+        let out = "\r\nHKEY_CURRENT_USER\\Environment\r\n    HTTP_PROXY    REG_SZ    http://127.0.0.1:8899\r\n\r\n";
+        assert_eq!(parse_reg_query_value(out, "HTTP_PROXY"), Some("http://127.0.0.1:8899".into()));
+        assert_eq!(parse_reg_query_value(out, "http_proxy"), Some("http://127.0.0.1:8899".into()));
+        assert_eq!(parse_reg_query_value(out, "HTTPS_PROXY"), None);
+        let expand = "    Path    REG_EXPAND_SZ    %USERPROFILE%\\bin;C:\\Tools\r\n";
+        assert_eq!(parse_reg_query_value(expand, "Path"), Some("%USERPROFILE%\\bin;C:\\Tools".into()));
+        let pac = "    AutoConfigURL    REG_SZ    http://127.0.0.1:8899/proxy.pac\r\n";
+        assert_eq!(parse_reg_query_value(pac, "AutoConfigURL"), Some("http://127.0.0.1:8899/proxy.pac".into()));
+        // A longer name that merely starts with the requested one is not a match
+        let other = "    HTTP_PROXY_EXTRA    REG_SZ    x\r\n";
+        assert_eq!(parse_reg_query_value(other, "HTTP_PROXY"), None);
+    }
+
+    fn env_lookup<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |name: &str| {
+            vars.iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
+    #[test]
+    fn test_legacy_env_cleanup_removes_zastava_values() {
+        // Exactly what Zastava <= 1.2.0 persisted into HKCU\Environment
+        let vars = [
+            ("HTTP_PROXY", "http://127.0.0.1:8899"),
+            ("HTTPS_PROXY", "http://127.0.0.1:8899"),
+            ("ALL_PROXY", "http://127.0.0.1:8899"),
+            ("NO_PROXY", NO_PROXY_VALUE),
+            ("LANG", "en_US.UTF-8"),
+            ("LC_TIME", "en_US.UTF-8"),
+            ("TZ", "Europe/Amsterdam"),
+        ];
+        let mut removed = legacy_zastava_env_vars_to_remove(env_lookup(&vars));
+        removed.sort();
+        assert_eq!(
+            removed,
+            vec!["ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "LANG", "LC_TIME", "NO_PROXY", "TZ"]
+        );
+    }
+
+    #[test]
+    fn test_legacy_env_cleanup_keeps_user_values() {
+        // User's own corporate proxy and locale: nothing may be removed
+        let vars = [
+            ("HTTP_PROXY", "http://proxy.corp.example:3128"),
+            ("HTTPS_PROXY", "http://proxy.corp.example:3128"),
+            ("NO_PROXY", "localhost,.corp.example"),
+            ("LANG", "en_US.UTF-8"),
+            ("TZ", "Europe/Moscow"),
+        ];
+        assert!(legacy_zastava_env_vars_to_remove(env_lookup(&vars)).is_empty());
+
+        // Zastava proxy present, but the user's own non-default locale survives
+        let mixed = [
+            ("HTTPS_PROXY", "http://127.0.0.1:8900"),
+            ("LANG", "ru_RU.UTF-8"),
+            ("TZ", "MSK-3"),
+        ];
+        assert_eq!(legacy_zastava_env_vars_to_remove(env_lookup(&mixed)), vec!["HTTPS_PROXY"]);
+
+        assert!(legacy_zastava_env_vars_to_remove(env_lookup(&[])).is_empty());
     }
 
     #[test]

@@ -98,10 +98,6 @@ where
     deserializer.deserialize_any(AsnVisitor)
 }
 
-fn default_true() -> bool {
-    true
-}
-
 /// Upstream proxy gateway configuration (e.g. SOCKS5 / HTTP tunnel for AI traffic).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpstreamProxyConfig {
@@ -134,7 +130,8 @@ pub struct AppStateData {
     pub warmup_started_at: Option<u64>,
     #[serde(default)]
     pub synced_ai_timezone: Option<String>,
-    #[serde(default = "default_true")]
+    // Off by default: updates are unsigned installers that run silently (/S, msiexec /qn).
+    #[serde(default)]
     pub auto_update_enabled: bool,
 }
 
@@ -154,7 +151,7 @@ impl Default for AppStateData {
             upstream_proxy: None,
             warmup_started_at: None,
             synced_ai_timezone: None,
-            auto_update_enabled: true,
+            auto_update_enabled: false,
         }
     }
 }

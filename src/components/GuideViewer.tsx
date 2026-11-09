@@ -10,13 +10,12 @@ import {
   Lock,
   Terminal,
   Award,
-  Send,
   Download,
   Zap,
   Clock,
   Sparkles,
 } from "lucide-react";
-import { openExternal, openTelegramSupport } from "../utils/opener";
+import { openExternal } from "../utils/opener";
 import { openOsDatetimeSettings, syncAiAgentsTimezone } from "../utils/api";
 
 interface GuideViewerProps {
@@ -60,7 +59,7 @@ const VIRTUAL_CARD_PROVIDERS: VirtualCardProvider[] = [
     name: "Плати по миру",
     badge: "КАРТА №1 · СБП",
     tier: "Виртуальные карты Visa / Mastercard с пополнением в рублях",
-    url: "https://platipomiru.com/?code=UXCAF1Z9",
+    url: "https://platipomiru.com/",
     description:
       "Быстрый выпуск зарубежных карт для оплаты подписок Claude Pro, ChatGPT Plus, Cursor и зарубежных VPS через СБП.",
   },
@@ -69,7 +68,7 @@ const VIRTUAL_CARD_PROVIDERS: VirtualCardProvider[] = [
     name: "WantToPay",
     badge: "TELEGRAM-БОТ №2",
     tier: "Выпуск карт в Telegram за 2 минуты (3D Secure)",
-    url: "https://telegram.me/WantToPayBot?start=w17851188--ERIEX",
+    url: "https://telegram.me/WantToPayBot",
     description:
       "Удобный бот для выпуска виртуальных карт US / EU / HK с поддержкой 3D Secure. Проверяйте BIN во вкладке «Биллинг».",
   },
@@ -78,7 +77,7 @@ const VIRTUAL_CARD_PROVIDERS: VirtualCardProvider[] = [
     name: "e.pn",
     badge: "STRIPE PRO №3",
     tier: "Трастовые банковские BIN США и Европы с AVS",
-    url: "https://e.pn?a=nomadnocode",
+    url: "https://e.pn/",
     description:
       "Десятки проверенных банковских BIN США и ЕС с поддержкой проверки адреса (AVS) и максимальной проходимостью в Stripe.",
   },
@@ -95,7 +94,7 @@ const VPS_PROVIDERS: VpsProvider[] = [
     payments: ["Карты", "СБП", "Crypto"],
     specs: "1 vCPU · 1 ГБ RAM · NVMe · IPv4 + /64 IPv6",
     promoCode: "HOSTVDS",
-    url: "https://hostvds.com/?affiliate_uuid=3d2b6c0c-5d99-4065-9d37-a941a46e9282",
+    url: "https://hostvds.com/",
     description:
       "Самый доступный выделенный статический IPv4 и чистая /64 подсеть IPv6 в Амстердаме, Хельсинки и США. Идеален как зарубежный узел.",
   },
@@ -109,7 +108,7 @@ const VPS_PROVIDERS: VpsProvider[] = [
     payments: ["Карты РФ", "СБП", "Crypto", "Cards"],
     specs: "1 vCPU · 2 ГБ RAM · NVMe · IPv4 + IPv6",
     promoCode: "ISHOSTING",
-    url: "https://ishosting.com/affiliate/ODA5NyM4",
+    url: "https://ishosting.com/",
     description:
       "Безупречная репутация IP в базах Spamhaus и антифроде Anthropic/OpenAI. Поддержка Ubuntu 24.04 и выделенных подсетей IPv6.",
   },
@@ -123,7 +122,7 @@ const VPS_PROVIDERS: VpsProvider[] = [
     payments: ["Карты РФ", "СБП", "T-Pay"],
     specs: "1 vCPU · 1 ГБ RAM · Dual-Stack IPv4/IPv6",
     promoCode: "TIMEWEB",
-    url: "https://timeweb.cloud/?i=138893",
+    url: "https://timeweb.cloud/",
     description:
       "Лучший выбор для транзитного российского VPS (Москва / СПб) при сборке каскадного VPN (РФ → Зарубежье), а также узлов в Амстердаме и Франкфурте.",
   },
@@ -975,29 +974,6 @@ export const GuideViewer: React.FC<GuideViewerProps> = ({
           </div>
         </div>
       )}
-
-      {/* Direct Contact Banner */}
-      <div className="bg-gradient-to-r from-sky-500/10 to-indigo-500/10 rounded-lg border border-sky-500/20 p-2.5 flex items-center justify-between gap-2 mt-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="w-6 h-6 rounded-md bg-sky-500/15 text-sky-400 flex items-center justify-center shrink-0">
-            <Send className="w-3.5 h-3.5" />
-          </div>
-          <div className="min-w-0">
-            <div className="text-[11px] font-bold text-zinc-100">Нужна помощь или консультация?</div>
-            <div className="text-[10px] text-zinc-400 truncate">Поддержка и связь с разработчиком в Telegram</div>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            if (onToast) onToast("Поддержка", "Переход в Telegram: @nomadnocode", "info");
-            openTelegramSupport();
-          }}
-          className="shrink-0 px-2 py-1 rounded-md bg-sky-500 hover:bg-sky-400 text-zinc-950 font-bold text-[10px] flex items-center gap-1 transition-all cursor-pointer"
-        >
-          <span>@nomadnocode</span>
-        </button>
-      </div>
     </div>
   );
 };
