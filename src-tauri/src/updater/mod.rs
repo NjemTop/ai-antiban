@@ -326,7 +326,7 @@ fn apply_platform_update(
     safe_name: &str,
 ) -> Result<InstallUpdateResult, String> {
     if safe_name.ends_with(".app.tar.gz") {
-        let status = std::process::Command::new("tar")
+        let status = crate::sysproxy::silent_command("tar")
             .args([
                 "-xzf",
                 &target_file.to_string_lossy(),
@@ -345,7 +345,7 @@ fn apply_platform_update(
             return Err("В архиве обновления не найден пакет Zastava.app.".to_string());
         }
 
-        let _ = std::process::Command::new("xattr")
+        let _ = crate::sysproxy::silent_command("xattr")
             .args(["-cr", &extracted_app.to_string_lossy()])
             .status();
 
@@ -359,11 +359,11 @@ fn apply_platform_update(
             std::fs::write(&script_path, script)
                 .map_err(|e| format!("Не удалось подготовить скрипт обновления: {e}"))?;
 
-            let _ = std::process::Command::new("chmod")
+            let _ = crate::sysproxy::silent_command("chmod")
                 .args(["+x", &script_path.to_string_lossy()])
                 .status();
 
-            let _ = std::process::Command::new("sh")
+            let _ = crate::sysproxy::silent_command("sh")
                 .arg(&script_path)
                 .spawn()
                 .map_err(|e| format!("Не удалось запустить установщик обновления: {e}"))?;
@@ -400,7 +400,7 @@ fn apply_platform_update(
             });
         } else {
             // Running from cargo dev / non-bundle binary: open the extracted .app in Finder
-            let _ = std::process::Command::new("open")
+            let _ = crate::sysproxy::silent_command("open")
                 .args(["-R", &extracted_app.to_string_lossy()])
                 .spawn();
 
@@ -457,11 +457,11 @@ open "{dmg_path}"
     std::fs::write(&script_path, script)
         .map_err(|e| format!("Не удалось создать скрипт автообновления: {e}"))?;
 
-    let _ = std::process::Command::new("chmod")
+    let _ = crate::sysproxy::silent_command("chmod")
         .args(["+x", &script_path.to_string_lossy()])
         .status();
 
-    std::process::Command::new("sh")
+    crate::sysproxy::silent_command("sh")
         .arg(&script_path)
         .spawn()
         .map_err(|e| format!("Не удалось запустить скрипт обновления: {e}"))?;
@@ -524,7 +524,7 @@ fn apply_platform_update(
         let _ = std::fs::write(&bat_path, bat_content);
     }
 
-    std::process::Command::new("cmd")
+    crate::sysproxy::silent_command("cmd")
         .args(["/C", &bat_path.to_string_lossy()])
         .spawn()
         .map_err(|e| format!("Не удалось запустить установщик обновления: {e}"))?;

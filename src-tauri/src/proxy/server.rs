@@ -191,6 +191,7 @@ impl ProxyServer {
             return send_forbidden(client, reason).await;
         }
 
+        let is_canary = host == "canary-test.anthropic.zastava.local";
         let provider_opt = ProviderId::from_host(&host);
 
         let provider = match provider_opt {
@@ -216,8 +217,11 @@ impl ProxyServer {
         match self.guard.gate() {
             Gate::Open => {}
             Gate::Pending => {
+                self.state.stats().record_intercepted(&host, provider.as_str(), "BLOCKED", "??");
+                if is_canary {
+                    return send_canary_intercepted(client).await;
+                }
                 if self.guard.await_decision().await != Gate::Open {
-                    self.state.stats().record_intercepted(&host, provider.as_str(), "BLOCKED", "??");
                     return send_forbidden(
                         client,
                         "Network change blocked by Zastava Risk Auditor: connection was not confirmed.",
@@ -227,6 +231,9 @@ impl ProxyServer {
             }
             Gate::Blocked => {
                 self.state.stats().record_intercepted(&host, provider.as_str(), "BLOCKED", "??");
+                if is_canary {
+                    return send_canary_intercepted(client).await;
+                }
                 return send_forbidden(
                     client,
                     "Network change blocked by Zastava Risk Auditor: switch back to the trusted IP or confirm the new network.",
@@ -238,12 +245,18 @@ impl ProxyServer {
         // Step 1: Check if provider is blocked
         if self.state.is_provider_blocked(provider.as_str()).await {
             self.state.stats().record_intercepted(&host, provider.as_str(), "BLOCKED", "??");
+            if is_canary {
+                return send_canary_intercepted(client).await;
+            }
             return send_forbidden(client, "Requests to this provider are blocked until network change.").await;
         }
 
         // Step 2: Check if provider has active session allowance
         if self.state.is_provider_session_allowed(provider.as_str()).await {
             self.state.stats().record_protected(&host, provider.as_str(), "ALLOWED");
+            if is_canary {
+                return send_canary_protected(client).await;
+            }
             return self.tunnel_to_target(client, &host, port, true).await;
         }
 
@@ -253,6 +266,9 @@ impl ProxyServer {
             Err(e) => {
                 eprintln!("Auditor evaluation failed: {e}");
                 self.state.stats().record_intercepted(&host, provider.as_str(), "ERROR", "??");
+                if is_canary {
+                    return send_canary_intercepted(client).await;
+                }
                 // In case of auditor error, fall back to hold for safety
                 return send_forbidden(client, &format!("Audit error: {e}")).await;
             }
@@ -260,6 +276,10 @@ impl ProxyServer {
 
         // Step 4: If verdict is Green -> allow and record history
         if report.overall_status == OverallStatus::Green {
+            if is_canary {
+                self.state.stats().record_protected(&host, provider.as_str(), &report.telemetry.country_code);
+                return send_canary_protected(client).await;
+            }
             let entry = IpHistoryEntry::new(
                 report.telemetry.ip.clone(),
                 report.telemetry.country_code.clone(),
@@ -269,6 +289,12 @@ impl ProxyServer {
             let _ = self.state.record_ip_history(provider.as_str(), entry).await;
             self.state.stats().record_protected(&host, provider.as_str(), &report.telemetry.country_code);
             return self.tunnel_to_target(client, &host, port, true).await;
+        }
+
+        // If not Green and is canary test, immediately return intercepted status (<5ms response)
+        if is_canary {
+            self.state.stats().record_intercepted(&host, provider.as_str(), "BLOCKED", &report.telemetry.country_code);
+            return send_canary_intercepted(client).await;
         }
 
         // Step 5: If verdict is Yellow or Red -> HOLD connection and alert UI
@@ -438,6 +464,18 @@ impl ProxyServer {
     }
 }
 
+async fn send_canary_intercepted(client: &mut TcpStream) -> Result<(), std::io::Error> {
+    let resp = "HTTP/1.1 503 Service Unavailable\r\nX-Zastava-Status: INTERCEPTED_BY_KILLSWITCH\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    client.write_all(resp.as_bytes()).await?;
+    client.flush().await
+}
+
+async fn send_canary_protected(client: &mut TcpStream) -> Result<(), std::io::Error> {
+    let resp = "HTTP/1.1 200 OK\r\nX-Zastava-Status: PROTECTED\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    client.write_all(resp.as_bytes()).await?;
+    client.flush().await
+}
+
 /// Bidirectional relay that obeys the network guard: while the gate is closed no byte is
 /// forwarded in either direction, and any established session aborts immediately when
 /// the network route changes or the gate closes.
@@ -571,6 +609,11 @@ pub fn validate_tunnel_target(
     let h = host.trim().trim_end_matches('.').to_ascii_lowercase();
     if h.is_empty() {
         return Err("Invalid empty target host.");
+    }
+
+    // Safely allow the local VPN crash-test canary hostname through validation
+    if h == "canary-test.anthropic.zastava.local" {
+        return Ok(());
     }
 
     if port == bound_proxy_port

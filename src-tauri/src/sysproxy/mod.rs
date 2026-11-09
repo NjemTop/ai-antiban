@@ -16,6 +16,21 @@ const ZASTAVA_RC_START: &str = "# >>> Zastava AI CLI & IDE Guard >>>";
 const ZASTAVA_RC_END: &str = "# <<< Zastava AI CLI & IDE Guard <<<";
 const NO_PROXY_VALUE: &str = "localhost,127.0.0.1,::1,.local";
 
+/// Spawns a Command configured on Windows with `CREATE_NO_WINDOW` (0x08000000)
+/// to completely prevent cmd.exe / PowerShell / Terminal console windows flashing.
+pub fn silent_command<S: AsRef<std::ffi::OsStr>>(program: S) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SysproxyStatus {
     pub enabled: bool,
@@ -87,7 +102,7 @@ pub fn disable_all_sysproxy() {
     {
         if let Ok(services) = get_macos_network_services() {
             for service in services {
-                let _ = std::process::Command::new("networksetup")
+                let _ = silent_command("networksetup")
                     .args(["-setautoproxystate", &service, "off"])
                     .output();
             }
@@ -97,7 +112,7 @@ pub fn disable_all_sysproxy() {
     #[cfg(target_os = "windows")]
     {
         // On Windows remove HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings\AutoConfigURL
-        let _ = std::process::Command::new("reg")
+        let _ = silent_command("reg")
             .args([
                 "delete",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
@@ -132,12 +147,12 @@ pub fn enable_sysproxy(pac_url: &str) -> Result<SysproxyStatus, String> {
         }
         for service in services {
             // Set autoproxy URL
-            let output_url = std::process::Command::new("networksetup")
+            let output_url = silent_command("networksetup")
                 .args(["-setautoproxyurl", &service, pac_url])
                 .output();
 
             // Enable autoproxy state
-            let output_state = std::process::Command::new("networksetup")
+            let output_state = silent_command("networksetup")
                 .args(["-setautoproxystate", &service, "on"])
                 .output();
 
@@ -149,7 +164,7 @@ pub fn enable_sysproxy(pac_url: &str) -> Result<SysproxyStatus, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let output = std::process::Command::new("reg")
+        let output = silent_command("reg")
             .args([
                 "add",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
@@ -242,7 +257,7 @@ pub fn refresh_if_services_changed() -> bool {
                 .find(|s| s.eq_ignore_ascii_case("Wi-Fi") || s.contains("Ethernet"))
                 .or_else(|| services.first());
             if let Some(service) = check_target {
-                if let Ok(output) = std::process::Command::new("networksetup")
+                if let Ok(output) = silent_command("networksetup")
                     .args(["-getautoproxyurl", service])
                     .output()
                 {
@@ -264,7 +279,7 @@ pub fn refresh_if_services_changed() -> bool {
     {
         let pac = LAST_PAC_URL.lock().ok().and_then(|g| g.clone());
         if let Some(pac) = pac {
-            if let Ok(output) = std::process::Command::new("reg")
+            if let Ok(output) = silent_command("reg")
                 .args([
                     "query",
                     r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings",
@@ -286,7 +301,7 @@ pub fn refresh_if_services_changed() -> bool {
 
 #[cfg(target_os = "macos")]
 fn get_macos_network_services() -> Result<Vec<String>, std::io::Error> {
-    let output = std::process::Command::new("networksetup")
+    let output = silent_command("networksetup")
         .arg("-listallnetworkservices")
         .output()?;
 
@@ -447,22 +462,16 @@ pub fn get_windows_powershell_profile_paths() -> Vec<PathBuf> {
 
 #[cfg(target_os = "windows")]
 pub fn set_windows_user_env_var(name: &str, value: &str) -> std::io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    std::process::Command::new("reg")
+    silent_command("reg")
         .args(["add", r"HKCU\Environment", "/v", name, "/t", "REG_SZ", "/d", value, "/f"])
-        .creation_flags(CREATE_NO_WINDOW)
         .output()?;
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
 pub fn delete_windows_user_env_var(name: &str) -> std::io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-    let _ = std::process::Command::new("reg")
+    let _ = silent_command("reg")
         .args(["delete", r"HKCU\Environment", "/v", name, "/f"])
-        .creation_flags(CREATE_NO_WINDOW)
         .output();
     Ok(())
 }
@@ -977,7 +986,7 @@ pub fn enable_cli_and_ide_protection_with_tz(
         }
         let mut launchd_ok = false;
         for (k, v) in vars {
-            if std::process::Command::new("launchctl")
+            if silent_command("launchctl")
                 .args(["setenv", k, v])
                 .output()
                 .is_ok()
@@ -1115,7 +1124,7 @@ pub fn disable_cli_and_ide_runtime_settings() {
             "no_proxy",
             "TZ",
         ] {
-            let _ = std::process::Command::new("launchctl")
+            let _ = silent_command("launchctl")
                 .args(["unsetenv", k])
                 .output();
         }
@@ -1245,7 +1254,7 @@ pub fn is_cli_protection_enabled() -> bool {
     }
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = std::process::Command::new("reg")
+        if let Ok(output) = silent_command("reg")
             .args(["query", r"HKCU\Environment", "/v", "HTTP_PROXY"])
             .output()
         {
@@ -1271,7 +1280,7 @@ pub fn is_cli_protection_enabled() -> bool {
 pub fn open_os_datetime_settings() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
+        silent_command("open")
             .arg("x-apple.systempreferences:com.apple.preference.datetime")
             .spawn()
             .map_err(|e| format!("Failed to open macOS date & time settings: {e}"))?;
@@ -1280,7 +1289,7 @@ pub fn open_os_datetime_settings() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("cmd")
+        silent_command("cmd")
             .args(["/C", "start", "ms-settings:dateandtime"])
             .spawn()
             .map_err(|e| format!("Failed to open Windows date & time settings: {e}"))?;

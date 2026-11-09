@@ -84,6 +84,7 @@ export interface AppStateData {
   upstream_proxy?: UpstreamProxyConfig | null;
   warmup_started_at?: number | null;
   synced_ai_timezone?: string | null;
+  auto_update_enabled?: boolean;
 }
 
 export type AppStateSnapshot = AppStateData;
@@ -207,4 +208,40 @@ export interface GatewayStatsSnapshot {
   recent_events: RecentGatewayEvent[];
 }
 
+export interface ClaudeProfile {
+  id: string;
+  name: string;
+  bound_ip?: string | null;
+  bound_country?: string | null;
+  isolated_device_id: string;
+  created_at: number;
+  last_used_at: number;
+  is_active: boolean;
+  has_saved_session: boolean;
+}
 
+export interface ClaudeProfileListResponse {
+  profiles: ClaudeProfile[];
+  active_profile_id: string;
+  claude_desktop_installed: boolean;
+  storage_dir: string;
+}
+
+export interface ProfileSwitchResult {
+  previous_profile_id: string;
+  active_profile: ClaudeProfile;
+  cleaned_cache_items: number;
+  restored_files: number;
+  pinned_ip_updated?: string | null;
+  message: string;
+}
+
+export interface CrashTestStepResult {
+  timestamp: number;
+  target_host: string;
+  intercepted_by_killswitch: boolean;
+  http_status: number;
+  latency_ms: number;
+  status_code: string;
+  message: string;
+}

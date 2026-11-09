@@ -6,6 +6,7 @@ pub mod history;
 pub mod leaks;
 pub mod network;
 pub mod os_env;
+pub mod profile_switcher;
 pub mod rules;
 pub mod telemetry;
 

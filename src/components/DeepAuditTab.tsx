@@ -7,6 +7,9 @@ import {
   ChevronRight,
   ArrowRight,
   FlaskConical,
+  Pin,
+  Zap,
+  Activity,
 } from "lucide-react";
 import { AppStateData, CheckResult, RiskReport } from "../types";
 
@@ -15,6 +18,9 @@ interface DeepAuditTabProps {
   state: AppStateData | null;
   onNavigateToGuide?: (guideId?: string) => void;
   onSimulate?: () => void;
+  onPinCurrentIp?: (ip: string) => void;
+  onSyncTimezone?: () => void;
+  onOpenCrashTest?: () => void;
 }
 
 interface AuditRowItem {
@@ -31,6 +37,9 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
   state,
   onNavigateToGuide,
   onSimulate,
+  onPinCurrentIp,
+  onSyncTimezone,
+  onOpenCrashTest,
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -45,43 +54,60 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
   const { telemetry } = report;
 
   const dnsCheckResult: CheckResult =
-    report.checks?.find((c) => c.code.startsWith("DNS_") && !c.code.includes("COUNTRY") && !c.code.includes("BL")) ||
+    report.checks?.find(
+      (c) =>
+        c.code.startsWith("DNS_") &&
+        !c.code.includes("COUNTRY") &&
+        !c.code.includes("BL")
+    ) ||
     report.checks?.[6] || {
       status: "ok",
       code: "DNS_CLEAN",
-      message: "Утечек через локальные DNS-резолверы РФ не обнаружено (Cloudflare 1.1.1.1).",
+      message:
+        "Утечек через локальные DNS-резолверы РФ не обнаружено (Cloudflare 1.1.1.1).",
       guide_ref: null,
     };
 
   const locCheckResult: CheckResult =
-    report.checks?.find((c) => c.code.includes("LOCATION") || c.code.includes("WIFI")) ||
+    report.checks?.find(
+      (c) => c.code.includes("LOCATION") || c.code.includes("WIFI")
+    ) ||
     report.checks?.[8] || {
       status: "ok",
       code: "OS_LOCATION_SAFE",
-      message: "Защита Wi-Fi BSSID активна: службы геолокации не передают MAC-адреса роутеров.",
+      message:
+        "Защита Wi-Fi BSSID активна: службы геолокации не передают MAC-адреса роутеров.",
       guide_ref: "03-os-privacy-setup",
     };
 
   const reverseDnsResult: CheckResult =
-    report.checks?.find((c) => c.code.includes("REVERSE_DNS") || c.code.includes("PTR")) ||
+    report.checks?.find(
+      (c) => c.code.includes("REVERSE_DNS") || c.code.includes("PTR")
+    ) ||
     report.checks?.[9] || {
       status: "ok",
       code: "REVERSE_DNS_CLEAN",
-      message: "Reverse DNS (PTR): запись соответствует чистому выделенному серверу, стоп-слова анонимайзеров отсутствуют.",
+      message:
+        "Reverse DNS (PTR): запись соответствует чистому выделенному серверу, стоп-слова анонимайзеров отсутствуют.",
       guide_ref: null,
     };
 
   const dnsCountryResult: CheckResult =
-    report.checks?.find((c) => c.code.includes("DNS_COUNTRY") || c.code.includes("CROSS_BORDER")) ||
+    report.checks?.find(
+      (c) => c.code.includes("DNS_COUNTRY") || c.code.includes("CROSS_BORDER")
+    ) ||
     report.checks?.[10] || {
       status: "ok",
       code: "DNS_COUNTRY_CONSISTENT",
-      message: "Страна DNS-серверов совпадает с выходным шлюзом. Cross-Border DNS утечек не обнаружено.",
+      message:
+        "Страна DNS-серверов совпадает с выходным шлюзом. Cross-Border DNS утечек не обнаружено.",
       guide_ref: null,
     };
 
   const localeResult: CheckResult =
-    report.checks?.find((c) => c.code.includes("LOCALE") || c.code.includes("HYGIENE")) ||
+    report.checks?.find(
+      (c) => c.code.includes("LOCALE") || c.code.includes("HYGIENE")
+    ) ||
     report.checks?.[11] || {
       status: "ok",
       code: state?.synced_ai_timezone ? "LOCALE_HYGIENE_CLEAN" : "LOCALE_EN_SAFE",
@@ -114,8 +140,10 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
       name: "Привязка к личному IP",
       result: report.pinning_result,
       detail: state?.pinned_ip
-        ? `Сервер: ${state.pinned_ip} (${state.strict_pinning_enabled ? "Строгий" : "Уведомл."})`
-        : "IP не закреплен",
+        ? `Сервер: ${state.pinned_ip} (${
+            state.strict_pinning_enabled ? "Строгий" : "Уведомл."
+          })`
+        : "IP не закреплен (риск бана при скачках VPN)",
       metricTag: state?.pinned_ip ? "PINNED" : "UNPINNED",
     },
     {
@@ -132,7 +160,9 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
       name: "Провайдер и дата-центр (ASN)",
       result: report.asn_result,
       detail: telemetry.asn
-        ? `AS${telemetry.asn} · ${telemetry.isp || telemetry.org || "Хостинг"}`
+        ? `AS${telemetry.asn} · ${
+            telemetry.isp || telemetry.org || "Хостинг"
+          }`
         : "Провайдер не определен",
       metricTag: telemetry.asn ? `AS${telemetry.asn}` : "--",
     },
@@ -162,7 +192,9 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
         : telemetry.timezone
         ? `Зона IP: ${telemetry.timezone}`
         : report.timezone_result.message,
-      metricTag: state?.synced_ai_timezone ? "SYNCED" : telemetry.timezone || "UTC",
+      metricTag: state?.synced_ai_timezone
+        ? "SYNCED"
+        : telemetry.timezone || "UTC",
     },
     {
       id: "wifi_geo",
@@ -186,7 +218,8 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
       name: "Согласованность страны DNS",
       result: dnsCountryResult,
       detail: dnsCountryResult.message,
-      metricTag: dnsCountryResult.status === "ok" ? telemetry.country_code : "SPLIT",
+      metricTag:
+        dnsCountryResult.status === "ok" ? telemetry.country_code : "SPLIT",
     },
     {
       id: "locale_hygiene",
@@ -199,8 +232,12 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
   ];
 
   const passCount = auditItems.filter((i) => i.result.status === "ok").length;
-  const warnCount = auditItems.filter((i) => i.result.status === "warning").length;
-  const failCount = auditItems.filter((i) => i.result.status === "critical").length;
+  const warnCount = auditItems.filter(
+    (i) => i.result.status === "warning" || i.result.status === "yellow"
+  ).length;
+  const failCount = auditItems.filter(
+    (i) => i.result.status === "critical" || i.result.status === "red"
+  ).length;
 
   return (
     <div className="space-y-2">
@@ -214,8 +251,16 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
 
         <div className="flex items-center gap-1.5 text-[10px] font-mono tabular-nums">
           <span className="text-emerald-400 font-semibold">{passCount} ОК</span>
-          {warnCount > 0 && <span className="text-amber-400 font-semibold">· {warnCount} РИСК</span>}
-          {failCount > 0 && <span className="text-rose-400 font-semibold">· {failCount} СТОП</span>}
+          {warnCount > 0 && (
+            <span className="text-amber-400 font-semibold">
+              · {warnCount} РИСК
+            </span>
+          )}
+          {failCount > 0 && (
+            <span className="text-rose-400 font-semibold">
+              · {failCount} СТОП
+            </span>
+          )}
         </div>
       </div>
 
@@ -227,17 +272,25 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
 
           let badgeText = "ОК";
           let badgeClass = "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
-          let icon = <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" strokeWidth={1.75} />;
+          let icon = (
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" strokeWidth={1.75} />
+          );
 
-          if (status === "critical") {
+          if (status === "critical" || status === "red") {
             badgeText = "БЛОК";
             badgeClass = "bg-rose-500/15 text-rose-400 border-rose-500/30";
-            icon = <XCircle className="w-3.5 h-3.5 text-rose-400" strokeWidth={1.75} />;
-          } else if (status === "warning") {
+            icon = (
+              <XCircle className="w-3.5 h-3.5 text-rose-400" strokeWidth={1.75} />
+            );
+          } else if (status === "warning" || status === "yellow") {
             badgeText = "РИСК";
             badgeClass = "bg-amber-500/15 text-amber-400 border-amber-500/30";
-            icon = <AlertTriangle className="w-3.5 h-3.5 text-amber-400" strokeWidth={1.75} />;
+            icon = (
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-400" strokeWidth={1.75} />
+            );
           }
+
+          const isNotOk = status !== "ok" && status !== "green";
 
           return (
             <div key={item.id} className="transition-colors hover:bg-white/[0.015]">
@@ -263,6 +316,59 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
                 </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
+                  {/* 1-Click Fix inline button on row if not ok */}
+                  {isNotOk && item.id === "pinning" && onPinCurrentIp && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onPinCurrentIp(telemetry.ip);
+                      }}
+                      className="px-2 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/35 text-[9.5px] font-mono font-bold text-emerald-300 flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                      title="Закрепить текущий IP в 1 клик"
+                    >
+                      <Pin className="w-2.5 h-2.5" />
+                      <span>Закрепить IP</span>
+                    </button>
+                  )}
+
+                  {isNotOk &&
+                    (item.id === "timezone" || item.id === "locale_hygiene") &&
+                    onSyncTimezone && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSyncTimezone();
+                        }}
+                        className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-[9.5px] font-mono font-bold text-amber-300 flex items-center gap-1 cursor-pointer transition-colors shadow-xs"
+                        title="Синхронизировать таймзону и локаль в 1 клик"
+                      >
+                        <Zap className="w-2.5 h-2.5" />
+                        <span>Синхронизировать TZ</span>
+                      </button>
+                    )}
+
+                  {isNotOk &&
+                    item.id !== "pinning" &&
+                    item.id !== "timezone" &&
+                    item.id !== "locale_hygiene" &&
+                    item.result.guide_ref &&
+                    onNavigateToGuide && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onNavigateToGuide(item.result.guide_ref || undefined);
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.1] text-[9px] font-sans text-amber-300 flex items-center gap-0.5 cursor-pointer transition-colors"
+                        title="Открыть инструкцию по устранению"
+                      >
+                        <span>Исправить</span>
+                        <ArrowRight className="w-2.5 h-2.5" />
+                      </button>
+                    )}
+
                   <span className="text-[9.5px] font-mono text-zinc-400 bg-zinc-900/90 border border-white/[0.06] px-1.5 py-0.5 rounded tabular-nums">
                     {item.metricTag}
                   </span>
@@ -283,31 +389,63 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
 
               {/* Detailed view */}
               {isExp && (
-                <div className="px-3 pb-2.5 pt-1.5 border-t border-white/[0.04] bg-zinc-950/60 text-[11px] space-y-1.5">
+                <div className="px-3 pb-2.5 pt-1.5 border-t border-white/[0.04] bg-zinc-950/60 text-[11px] space-y-2 animate-in fade-in duration-100">
                   <div className="flex justify-between text-[10px] font-mono text-zinc-400">
                     <span>Код триггера:</span>
-                    <span className="text-zinc-200 font-semibold">{item.result.code}</span>
+                    <span className="text-zinc-200 font-semibold">
+                      {item.result.code}
+                    </span>
                   </div>
 
                   <div className="text-[11px] font-sans text-zinc-300 bg-zinc-900/70 p-2 rounded border border-white/[0.05] leading-relaxed">
                     {item.result.message}
                   </div>
 
-                  {item.result.guide_ref && onNavigateToGuide && (
-                    <div className="pt-0.5 flex justify-end">
+                  {/* Contextual Action Buttons in expanded card */}
+                  <div className="flex items-center justify-between pt-1 flex-wrap gap-2">
+                    {item.id === "pinning" && onPinCurrentIp ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onPinCurrentIp(telemetry.ip);
+                        }}
+                        className="py-1 px-2.5 rounded bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-[10.5px] font-sans font-bold flex items-center gap-1.5 cursor-pointer shadow-sm transition-colors"
+                      >
+                        <Pin className="w-3 h-3" />
+                        <span>Закрепить IP ({telemetry.ip})</span>
+                      </button>
+                    ) : (item.id === "timezone" || item.id === "locale_hygiene") &&
+                      onSyncTimezone ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSyncTimezone();
+                        }}
+                        className="py-1 px-2.5 rounded bg-amber-500 hover:bg-amber-400 text-zinc-950 text-[10.5px] font-sans font-bold flex items-center gap-1.5 cursor-pointer shadow-sm transition-colors"
+                      >
+                        <Zap className="w-3 h-3" />
+                        <span>Синхронизировать TZ для ИИ</span>
+                      </button>
+                    ) : (
+                      <div />
+                    )}
+
+                    {item.result.guide_ref && onNavigateToGuide && (
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           onNavigateToGuide(item.result.guide_ref || undefined);
                         }}
-                        className="text-[10.5px] text-amber-400 hover:text-amber-300 font-sans font-medium flex items-center gap-1 cursor-pointer"
+                        className="text-[10.5px] text-amber-400 hover:text-amber-300 font-sans font-medium flex items-center gap-1 cursor-pointer transition-colors"
                       >
                         <span>Открыть инструкцию по устранению</span>
                         <ArrowRight className="w-3 h-3" strokeWidth={1.5} />
                       </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -315,35 +453,52 @@ export const DeepAuditTab: React.FC<DeepAuditTabProps> = ({
         })}
       </div>
 
-      {/* Educational Interception Demo Card */}
-      {onSimulate && (
-        <div className="bg-[#12141A] rounded-xl border border-white/[0.08] p-3.5 space-y-2 mt-3 shadow-xs">
+      {/* Dual Testing Block: Crash-Test + Hold Demo */}
+      <div className="bg-[#12141A] rounded-xl border border-white/[0.08] p-3 space-y-2.5 mt-3 shadow-xs">
+        <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-lg bg-amber-500/10 border border-amber-500/25 flex items-center justify-center text-amber-400">
-              <FlaskConical className="w-3.5 h-3.5" strokeWidth={1.75} />
+            <div className="w-6 h-6 rounded-lg bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-emerald-400">
+              <Activity className="w-3.5 h-3.5" strokeWidth={2} />
             </div>
             <div>
               <div className="text-xs font-bold text-white tracking-tight">
-                Учебная демонстрация окна перехвата (Демо-тест)
+                Полигон проверки Kill-Switch и Перехвата
               </div>
               <div className="text-[10px] text-zinc-400 font-mono">
-                Симуляция блокировки 403 / HOLD без вреда для реального соединения
+                Без риска для аккаунта · Локальные тесты ядра
               </div>
             </div>
           </div>
-          <p className="text-[11px] text-zinc-300 leading-relaxed font-sans">
-            Хотите увидеть, как работает автоматическая защита Заставы при обнаружении утечки? Нажмите демо-тест, чтобы вызвать окно удержания запроса и протестировать действия.
-          </p>
-          <button
-            type="button"
-            onClick={onSimulate}
-            className="w-full py-2 px-3 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors shadow-xs"
-          >
-            <FlaskConical className="w-3.5 h-3.5" />
-            <span>Запустить симуляцию перехвата (Демо HOLD)</span>
-          </button>
         </div>
-      )}
+
+        <p className="text-[10.5px] text-zinc-300 leading-relaxed font-sans">
+          Проверьте реакцию сетевого шлюза на внезапное падение VPN или протестируйте внешний вид окна перехвата перед началом работы.
+        </p>
+
+        <div className="grid grid-cols-2 gap-2 pt-0.5">
+          {onOpenCrashTest && (
+            <button
+              type="button"
+              onClick={onOpenCrashTest}
+              className="py-2 px-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 active:scale-[0.99] text-zinc-950 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-md shadow-emerald-500/15 truncate"
+            >
+              <Activity className="w-3.5 h-3.5" />
+              <span className="truncate">Краш-тест обрыва VPN</span>
+            </button>
+          )}
+
+          {onSimulate && (
+            <button
+              type="button"
+              onClick={onSimulate}
+              className="py-2 px-2.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 active:scale-[0.99] border border-amber-500/30 text-amber-300 hover:text-amber-200 text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-xs truncate"
+            >
+              <FlaskConical className="w-3.5 h-3.5" />
+              <span className="truncate">Демо перехватчика</span>
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 };

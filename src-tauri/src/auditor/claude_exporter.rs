@@ -737,7 +737,7 @@ fn pack_directory_to_zip(dir: &Path, zip_file: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         // Use macOS native ditto for cleanest zip preservation
-        let status = std::process::Command::new("ditto")
+        let status = crate::sysproxy::silent_command("ditto")
             .args([
                 "-c",
                 "-k",
@@ -752,7 +752,7 @@ fn pack_directory_to_zip(dir: &Path, zip_file: &Path) -> Result<(), String> {
             return Ok(());
         }
         // Fallback to zip
-        let status2 = std::process::Command::new("zip")
+        let status2 = crate::sysproxy::silent_command("zip")
             .args([
                 "-r",
                 "-q",
@@ -775,7 +775,7 @@ fn pack_directory_to_zip(dir: &Path, zip_file: &Path) -> Result<(), String> {
             dir.display(),
             zip_file.display()
         );
-        let status = std::process::Command::new("powershell")
+        let status = crate::sysproxy::silent_command("powershell")
             .args(["-NoProfile", "-Command", &cmd])
             .status()
             .map_err(|e| format!("PowerShell Compress-Archive error: {e}"))?;
@@ -787,7 +787,7 @@ fn pack_directory_to_zip(dir: &Path, zip_file: &Path) -> Result<(), String> {
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let status = std::process::Command::new("zip")
+        let status = crate::sysproxy::silent_command("zip")
             .args([
                 "-r",
                 "-q",

@@ -24,6 +24,8 @@ import {
   Zap,
   Clock,
   FolderArchive,
+  Settings,
+  Activity,
 } from "lucide-react";
 import {
   AppStateData,
@@ -58,6 +60,7 @@ import {
   setMockScenario,
   simulateInterception,
   syncAiAgentsTimezone,
+  toggleAutoUpdate,
   toggleStrictPinning,
   toggleSysproxy,
   unblockProvider,
@@ -71,6 +74,9 @@ import { GuideViewer } from "./GuideViewer";
 import { BinCheckerTab } from "./BinCheckerTab";
 import { CleanIpTab } from "./CleanIpTab";
 import { ToastContainer, ToastMessage } from "./Toast";
+import { SettingsModal } from "./SettingsModal";
+import { ClaudeProfilesCard } from "./ClaudeProfilesCard";
+import { VpnCrashTestModal } from "./VpnCrashTestModal";
 import { openExternal, openTelegramSupport } from "../utils/opener";
 
 type ActiveTab = "pulse" | "clean-ip" | "bin" | "audit" | "guide";
@@ -94,7 +100,6 @@ export function parseReleaseNotes(notes: string): ParsedChangelogSection[] {
     const line = rawLine.trim();
     if (!line) continue;
 
-    // Filter out download links and raw artifacts
     if (
       line.includes(".dmg") ||
       line.includes(".exe") ||
@@ -107,7 +112,6 @@ export function parseReleaseNotes(notes: string): ParsedChangelogSection[] {
       continue;
     }
 
-    // Section title
     if (line.startsWith("#")) {
       if (currentItems.length > 0) {
         sections.push({ title: currentTitle, items: currentItems });
@@ -117,7 +121,6 @@ export function parseReleaseNotes(notes: string): ParsedChangelogSection[] {
       continue;
     }
 
-    // Bullet point
     if (/^[-*•]\s+/.test(line)) {
       const cleanItem = line.replace(/^[-*•]\s+/, "").replace(/[*_]/g, "").trim();
       if (cleanItem) {
@@ -160,7 +163,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   const [state, setState] = useState<AppStateData | null>(null);
   const [reports, setReports] = useState<Partial<Record<ProviderId, RiskReport>>>({});
   const [refreshing, setRefreshing] = useState<boolean>(false);
-  const [scanLatencyMs, setScanLatencyMs] = useState<number>(42);
+  const [scanLatencyMs, setScanLatencyMs] = useState<number>(38);
   const [sysproxyActive, setSysproxyActive] = useState<boolean>(true);
   const [copiedIp, setCopiedIp] = useState<boolean>(false);
   const [copiedCli, setCopiedCli] = useState<boolean>(false);
@@ -177,6 +180,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   const [gatewayStats, setGatewayStats] = useState<GatewayStatsSnapshot | null>(null);
   const [pulseProtected, setPulseProtected] = useState<boolean>(false);
   const [feedExpanded, setFeedExpanded] = useState<boolean>(false);
+
+  // v1.2.0: Settings and Crash Test Modals
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+  const [showCrashTestModal, setShowCrashTestModal] = useState<boolean>(false);
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean>(true);
 
   const [updaterStatus, setUpdaterStatus] = useState<UpdateStatusPayload | null>(null);
   const [showChangelog, setShowChangelog] = useState<boolean>(false);
@@ -222,6 +230,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
     try {
       const st = await fetchAppState();
       setState(st);
+      if (st.auto_update_enabled !== undefined) {
+        setAutoUpdateEnabled(st.auto_update_enabled);
+      }
 
       const proxyActive = await getSysproxyStatus();
       setSysproxyActive(proxyActive);
@@ -339,6 +350,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
     }
   };
 
+  const handleToggleAutoUpdate = async (enabled: boolean) => {
+    try {
+      await toggleAutoUpdate(enabled);
+      setAutoUpdateEnabled(enabled);
+      showToast(
+        enabled ? "Автообновление включено" : "Автообновление выключено",
+        enabled
+          ? "Застава будет автоматически проверять стабильные релизы"
+          : "Автоматическая проверка обновлений отключена",
+        "info"
+      );
+    } catch (err: any) {
+      showToast("Ошибка переключения", err?.message || String(err), "error");
+    }
+  };
+
   useEffect(() => {
     runFullAudit(false);
     handleCheckUpdates(true);
@@ -361,6 +388,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
 
       listen("tray://check-updates", () => {
         handleCheckUpdates(false);
+      }).then((un) => unlisteners.push(un));
+
+      // v1.2.0: Tray Event Listeners
+      listen("tray://sync-tz", () => {
+        handleSyncTz();
+      }).then((un) => unlisteners.push(un));
+
+      listen("tray://backup-claude", () => {
+        handleExportClaude();
+      }).then((un) => unlisteners.push(un));
+
+      listen("tray://open-crash-test", () => {
+        setShowCrashTestModal(true);
       }).then((un) => unlisteners.push(un));
 
       listen<UpdateProgressPayload>("updater://progress", (event) => {
@@ -441,7 +481,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
         try {
           await navigator.clipboard.writeText(report.shell_command);
         } catch {
-          // clipboard optional if auto-configuration succeeded
+          // optional clipboard
         }
         setCopiedCli(true);
         const targets =
@@ -460,7 +500,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
   };
 
   const handleSyncTz = async (tzOverride?: string) => {
-    const tz = tzOverride || activeReport?.telemetry?.timezone || "Europe/London";
+    const tz = tzOverride || activeReport?.telemetry?.timezone || "Europe/Amsterdam";
     setSyncingTz(true);
     try {
       const res = await syncAiAgentsTimezone(tz);
@@ -705,164 +745,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
     <div className="w-full max-w-[460px] min-h-[660px] bg-[#0A0B0E] text-zinc-100 flex flex-col justify-between p-3.5 select-none font-sans border border-white/[0.08] rounded-xl shadow-2xl relative">
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
 
-      {/* GitHub Update Check & Auto-Updater Modal */}
-      {showUpdateModal && updateInfo && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="update-dialog-title"
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 animate-in fade-in duration-150"
-        >
-          <div className="w-full max-w-[348px] bg-[#12141A] border border-white/[0.12] rounded-xl p-3.5 shadow-2xl space-y-2.5">
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <div
-                  className={`w-7 h-7 rounded-lg flex items-center justify-center border ${
-                    updateInfo.update_available
-                      ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400"
-                      : "bg-zinc-900 border-white/[0.08] text-zinc-300"
-                  }`}
-                >
-                  <Download className="w-4 h-4" />
-                </div>
-                <div>
-                  <h2 id="update-dialog-title" className="text-xs font-bold text-white">
-                    {updateInfo.update_available
-                      ? `Доступно обновление v${updateInfo.latest_version}`
-                      : "Установлена актуальная версия"}
-                  </h2>
-                  <p className="text-[10px] font-mono text-zinc-400">
-                    Текущая: v{updateInfo.current_version} · Релиз на GitHub: v{updateInfo.latest_version}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                disabled={installingUpdate}
-                onClick={() => setShowUpdateModal(false)}
-                className="p-1 rounded-md text-zinc-400 hover:text-white hover:bg-white/[0.06] cursor-pointer"
-                title="Закрыть"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            <div className="bg-black/40 border border-white/[0.06] rounded-lg p-2 max-h-[160px] overflow-y-auto text-[10.5px] text-zinc-300 leading-relaxed font-sans space-y-2">
-              <div className="flex items-center justify-between pb-1 border-b border-white/[0.05] text-[9px] text-zinc-500 font-mono">
-                <span>ИЗМЕНЕНИЯ</span>
-                <button
-                  type="button"
-                  onClick={() => setShowFullReleaseText((v) => !v)}
-                  className="text-zinc-400 hover:text-zinc-200 underline cursor-pointer"
-                >
-                  {showFullReleaseText ? "Краткий вид" : "Полный текст"}
-                </button>
-              </div>
-              {showFullReleaseText ? (
-                <div className="whitespace-pre-wrap text-[10px]">
-                  {updateInfo.release_notes || updateInfo.release_name || "Описание релиза отсутствует."}
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  {parseReleaseNotes(updateInfo.release_notes || updateInfo.release_name || "").map(
-                    (sec, sIdx) => (
-                      <div key={sIdx} className="space-y-0.5">
-                        {sec.title && (
-                          <div className="text-[9.5px] font-semibold text-zinc-200 font-mono">
-                            {sec.title}
-                          </div>
-                        )}
-                        <ul className="space-y-1 pl-1">
-                          {sec.items.map((item, iIdx) => (
-                            <li key={iIdx} className="flex items-start gap-1.5 text-zinc-300 leading-tight">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0 mt-1" />
-                              <span>{item}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )
-                  )}
-                </div>
-              )}
-            </div>
-
-            {installingUpdate && (
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-[10px] font-mono text-emerald-300">
-                  <span>
-                    {updaterStatus?.message ||
-                      (updateProgress?.phase === "installing"
-                        ? "Установка обновления и перезапуск..."
-                        : "Скачивание релиза с GitHub...")}
-                  </span>
-                  <span>{updateProgress?.percent ?? 50}%</span>
-                </div>
-                <div className="w-full h-1.5 bg-zinc-900 rounded-full overflow-hidden border border-white/[0.06]">
-                  <div
-                    className="h-full bg-emerald-400 transition-all duration-150"
-                    style={{ width: `${Math.max(5, updateProgress?.percent ?? 50)}%` }}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="flex items-center justify-between gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => openExternal(updateInfo.release_url)}
-                className="px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-[10.5px] text-zinc-300 flex items-center gap-1 cursor-pointer"
-              >
-                <span>GitHub Release</span>
-                <ExternalLink className="w-3 h-3" />
-              </button>
-
-              {updateInfo.update_available ? (
-                <button
-                  type="button"
-                  disabled={installingUpdate}
-                  onClick={handleInstallUpdate}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-zinc-950 font-bold text-[11px] flex items-center gap-1.5 cursor-pointer transition-colors"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>{installingUpdate ? "Обновление..." : "Обновить автоматически"}</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setShowUpdateModal(false)}
-                  className="px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-[11px] cursor-pointer"
-                >
-                  Понятно
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* In-window Emergency Interception Overlay (guarantees user always sees hold prompt) */}
-      {interceptPayload && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-2">
-          <div className="scale-[0.78] origin-center">
-            <AlertPopup
-              initialPayload={interceptPayload}
-              onResolved={() => {
-                setInterceptPayload(null);
-                runFullAudit(false);
-              }}
-            />
-          </div>
-        </div>
-      )}
-
       {/* Top Header */}
       <div>
-        {/* Simulated / Live macOS Menu Bar Status Strip */}
+        {/* Live System Tray Strip (Cross-platform: Windows / macOS / Linux) */}
         <div className="flex items-center justify-between px-2 py-1 mb-2 rounded-md bg-[#12141A] border border-white/[0.06] text-[10px]">
           <div className="flex items-center gap-1.5">
             <span className={`w-2 h-2 rounded-full ${trayDotClass}`} />
-            <span className="text-zinc-400 font-medium">Трей macOS:</span>
+            <span className="text-zinc-400 font-medium">Системный трей:</span>
             <span className="font-mono font-bold text-zinc-100 tracking-tight tabular-nums">
               {trayBadgeText}
             </span>
@@ -914,22 +803,32 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                       : "bg-zinc-900 hover:bg-zinc-800 border-white/[0.08] text-zinc-300"
                   }`}
                 >
-                  <span>v{updateInfo?.current_version || "1.1.3"}</span>
+                  <span>v1.2.0</span>
                   <Download className={`w-2.5 h-2.5 ${checkingUpdate ? "animate-bounce text-emerald-400" : updateInfo?.update_available ? "text-amber-300" : "text-zinc-400"}`} />
                 </button>
               </div>
               <p className="text-[9.5px] text-zinc-500 leading-none mt-0.5">
-                Сетевой шлюз · Zero-MITM
+                Защита от бана ИИ · Без чтения чатов
               </p>
             </div>
           </div>
 
-          {/* Controls: Support, PAC Proxy Toggle & Refresh */}
+          {/* Controls: Settings Gear, Support, PAC Proxy Toggle & Refresh */}
           <div className="flex items-center gap-1.5">
+            {/* Gear Button -> SettingsModal */}
+            <button
+              type="button"
+              onClick={() => setShowSettingsModal(true)}
+              title="Настройки и сетевая прозрачность"
+              className="p-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-zinc-400 hover:text-white transition-colors cursor-pointer"
+            >
+              <Settings className="w-3.5 h-3.5" />
+            </button>
+
             <button
               type="button"
               onClick={handleOpenSupport}
-              title="Связь и поддержка в Telegram: @nomadnocode (t.me / telegram.me)"
+              title="Связь и поддержка в Telegram: @nomadnocode"
               className="flex items-center gap-1 px-1.5 py-1 rounded-md bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/25 text-[10px] font-sans font-medium text-sky-300 hover:text-sky-200 transition-colors cursor-pointer"
             >
               <Send className="w-2.5 h-2.5 text-sky-400" />
@@ -1039,7 +938,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
         <main className="mt-2.5 flex-1">
           {activeTab === "pulse" && (
             <div className="space-y-3 animate-in fade-in duration-150">
-              {/* 0. Live macOS System Update Banner */}
+              {/* 0. Live System Update Banner */}
               {updateInfo?.update_available && (
                 <div className="bg-[#12141A] rounded-xl border border-amber-500/30 p-3 space-y-2.5 shadow-sm font-sans">
                   <div className="flex items-center justify-between">
@@ -1050,7 +949,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                           Доступно обновление v{updateInfo.latest_version}
                         </div>
                         <div className="text-[10px] font-mono text-zinc-400">
-                          Текущая: v{updateInfo.current_version || "1.1.3"} · Релиз на GitHub
+                          Текущая: v{updateInfo.current_version || "1.2.0"} · Релиз на GitHub
                         </div>
                       </div>
                     </div>
@@ -1060,7 +959,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                         onClick={() => setShowChangelog((v) => !v)}
                         className="px-2 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-[10px] font-medium text-zinc-300 hover:text-white cursor-pointer transition-colors"
                       >
-                        {showChangelog ? "Скрыть" : "Что изменилось"}
+                        {showChangelog ? "Скрыть" : "Что нового"}
                       </button>
                       <button
                         type="button"
@@ -1072,7 +971,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                         <span>
                           {installingUpdate
                             ? updaterStatus?.message || updateProgress?.phase || "Установка..."
-                            : "Установить и перезапустить"}
+                            : "Обновить"}
                         </span>
                       </button>
                     </div>
@@ -1120,23 +1019,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                       )}
                     </div>
                   )}
-
-                  {installingUpdate && (
-                    <div className="space-y-1 pt-1 border-t border-white/[0.05]">
-                      <div className="flex items-center justify-between text-[10px] font-mono text-emerald-300">
-                        <span>{updaterStatus?.message || updateProgress?.phase || "Скачивание пакета..."}</span>
-                        <span>{updateProgress?.percent ?? 50}%</span>
-                      </div>
-                      <div className="w-full h-1.5 bg-zinc-900 rounded-full overflow-hidden border border-white/[0.06]">
-                        <div
-                          className="h-full bg-emerald-400 transition-all duration-200"
-                          style={{ width: `${Math.max(5, updateProgress?.percent ?? 50)}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
+
               {/* 1. Главный вердикт (Human-Friendly Status Hero Card) */}
               <div className="bg-[#12141A] rounded-xl border border-white/[0.08] p-3.5 space-y-3 shadow-xs">
                 <div className="flex items-center justify-between text-[10px] text-zinc-400 pb-2 border-b border-white/[0.05]">
@@ -1245,14 +1130,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                     {anyRed ? (
                       <span>
                         <strong className="font-semibold text-rose-300">Опасно! </strong>
-                        Обнаружен российский/белорусский IP или критическая утечка. Запросы к ИИ автоматически удерживаются.
+                        Обнаружен неподдерживаемый регион или критическая утечка. Запросы к ИИ автоматически удерживаются шлюзом.
                       </span>
                     ) : anyYellow ? (
                       <div className="space-y-1">
                         <span>
                           <strong className="font-semibold text-amber-300">Внимание: </strong>
                           {tzMismatch
-                            ? "Часовой пояс компьютера не совпадает со страной IP (повышает риск бана при оплате с 31% до 48%)."
+                            ? "Часовой пояс компьютера не совпадает со страной IP (повышает риск проверок биллинга)."
                             : activeReport?.dnsbl_result?.status === "critical" ||
                               activeReport?.dnsbl_result?.status === "warning"
                             ? "IP замечен в спам-базах, коммерческий VPN может вызвать проверку платформы."
@@ -1272,7 +1157,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                                   ? "TZ синхронизирован!"
                                   : syncingTz
                                   ? "Синхронизация..."
-                                  : "⚡ Авто-TZ для ИИ (VS Code / CLI)"}
+                                  : "⚡ Авто-TZ для ИИ"}
                               </span>
                             </button>
 
@@ -1282,7 +1167,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                               className="px-2.5 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-zinc-300 hover:text-white text-[10.5px] font-sans font-medium flex items-center gap-1 cursor-pointer transition-colors"
                             >
                               <Clock className="w-3 h-3 text-zinc-400" />
-                              <span>🕒 Часы macOS и Гайд →</span>
+                              <span>🕒 Часы системы и Гайд →</span>
                             </button>
                           </div>
                         )}
@@ -1290,13 +1175,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                     ) : (
                       <span>
                         <strong className="font-semibold text-emerald-300">Вход безопасен: </strong>
-                        Вход в Claude и ChatGPT безопасен. Ваш IP чистый, утечек региона не обнаружено.
+                        Вход в Claude и ChatGPT защищен. Ваш IP чистый, чаты зашифрованы, утечек региона не обнаружено.
                       </span>
                     )}
                   </div>
                 </div>
 
-                {/* Живой пульс защиты (Zero-MITM) */}
+                {/* ЖИВОЙ ПУЛЬС ЗАЩИТЫ · БЕЗ ЧТЕНИЯ ЧАТОВ */}
                 <div className="pt-2.5 border-t border-white/[0.06] space-y-2">
                   <div className="flex items-center justify-between text-[10px]">
                     <span className="text-zinc-400 font-semibold uppercase tracking-wider flex items-center gap-1.5 font-sans">
@@ -1304,14 +1189,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                         <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                         <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
                       </span>
-                      <span>Живой пульс защиты (Zero-MITM)</span>
+                      <span>ЖИВОЙ ПУЛЬС ЗАЩИТЫ · БЕЗ ЧТЕНИЯ ЧАТОВ</span>
                     </span>
                     <span className="text-zinc-500 font-mono text-[9px] tabular-nums">
                       {gatewayStats?.uptime_seconds ? `Uptime ${Math.floor(gatewayStats.uptime_seconds / 60)}м` : "Live Gateway"}
                     </span>
                   </div>
 
-                  {/* 3 Interactive Counter Cards in a 3-column grid */}
+                  {/* 3 Interactive Counter Cards */}
                   <div className="grid grid-cols-3 gap-2">
                     {/* Card 1: Защищено ИИ */}
                     <div
@@ -1333,11 +1218,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                       </div>
                     </div>
 
-                    {/* Card 2: Утечек отбито */}
+                    {/* Card 2: Сбоев VPN отбито */}
                     <div className="bg-[#0c0e14] rounded-lg p-2 border border-rose-500/25 hover:border-rose-500/40 transition-all">
                       <div className="text-[10px] font-sans text-rose-400 font-semibold flex items-center gap-1">
                         <ShieldAlert className="w-3 h-3 text-rose-400 shrink-0" />
-                        <span className="truncate">Утечек отбито</span>
+                        <span className="truncate">Сбоев VPN отбито</span>
                       </div>
                       <div className="text-base font-bold font-mono text-rose-300 mt-0.5 tabular-nums">
                         {gatewayStats?.intercepted_leaks ?? 0}
@@ -1347,27 +1232,27 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                       </div>
                     </div>
 
-                    {/* Card 3: Прямой транзит */}
+                    {/* Card 3: Обычные сайты */}
                     <div className="bg-[#0c0e14] rounded-lg p-2 border border-sky-500/25 hover:border-sky-500/40 transition-all">
                       <div className="text-[10px] font-sans text-sky-400 font-semibold flex items-center gap-1">
                         <Zap className="w-3 h-3 text-sky-400 shrink-0" />
-                        <span className="truncate">Прямой транзит</span>
+                        <span className="truncate">Обычные сайты</span>
                       </div>
                       <div className="text-base font-bold font-mono text-sky-300 mt-0.5 tabular-nums">
                         {gatewayStats?.direct_bypassed_requests ?? 0}
                       </div>
                       <div className="text-[9px] font-sans text-zinc-500 mt-0.5 leading-tight truncate">
-                        сайты без ИИ · 0 мс
+                        прямой транзит · 0 мс
                       </div>
                     </div>
                   </div>
 
-                  {/* Calm explanation string under the 3 counters */}
+                  {/* Calm explanation string */}
                   <div className="text-[10px] text-neutral-500 leading-relaxed font-sans px-0.5">
-                    Все запросы к ИИ проходят 12 проверок шлюза. Обычные сайты, GitHub и менеджеры пакетов идут напрямую без задержки.
+                    Все запросы к ИИ проходят 12 проверок шлюза. Обычные сайты, GitHub и менеджеры пакетов идут напрямую без задержки. Чаты зашифрованы.
                   </div>
 
-                  {/* Live Activity Radar Pill (Expandable on click) */}
+                  {/* Expandable radar feed */}
                   <div
                     onClick={() => setFeedExpanded(!feedExpanded)}
                     className="bg-[#0c0e14] hover:bg-[#11131c] rounded-lg px-2.5 py-1.5 border border-white/[0.06] hover:border-white/[0.12] cursor-pointer transition-colors space-y-1.5"
@@ -1391,12 +1276,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                       </span>
                     </div>
 
-                    {/* Expandable mini-feed of stats.recent_events */}
                     {feedExpanded && (
                       <div className="pt-2 border-t border-white/[0.05] space-y-1.5 animate-in fade-in duration-150">
                         {(!gatewayStats?.recent_events || gatewayStats.recent_events.length === 0) ? (
                           <div className="text-[10px] font-sans text-zinc-500 text-center py-1.5">
-                            Ожидание первых запросов Claude, GPT, Gemini или Antigravity...
+                            Ожидание первых запросов Claude, GPT, Gemini...
                           </div>
                         ) : (
                           gatewayStats.recent_events.slice().reverse().map((ev, idx) => {
@@ -1431,12 +1315,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                                   ) : isProtected ? (
                                     <div className="flex items-center gap-1 px-1.5 py-0.2 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[8.5px] font-mono font-bold">
                                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                                      <span>ИИ · ЗАЩИЩЕНО · {ev.country || "GB"}</span>
+                                      <span>ИИ · ЗАЩИЩЕНО · {ev.country || "NL"}</span>
                                     </div>
                                   ) : (
                                     <div className="flex items-center gap-1 px-1.5 py-0.2 rounded bg-rose-500/15 border border-rose-500/30 text-rose-400 text-[8.5px] font-mono font-bold">
                                       <span className="w-1.5 h-1.5 rounded-full bg-rose-400 shrink-0" />
-                                      <span>ИИ · УДЕРЖАНО · {ev.country || "??"}</span>
+                                      <span>ИИ · УДЕРЖАНО</span>
                                     </div>
                                   )}
                                 </div>
@@ -1450,17 +1334,46 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                 </div>
               </div>
 
-              {/* 2. Карточка «Что сейчас под защитой» (3 понятные строки) */}
+              {/* БЫСТРЫЕ ДЕЙСТВИЯ (Quick Actions Bar) */}
+              <div className="bg-[#12141A] rounded-xl border border-white/[0.08] p-3 space-y-2 shadow-xs">
+                <div className="flex items-center justify-between text-[10px] text-zinc-400 pb-1.5 border-b border-white/[0.05]">
+                  <span className="font-semibold uppercase tracking-wider">БЫСТРЫЕ ДЕЙСТВИЯ</span>
+                  <span className="text-[9.5px] font-mono text-emerald-400">Чаты зашифрованы</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCrashTestModal(true)}
+                    className="py-2 px-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 active:scale-[0.99] text-zinc-950 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-md shadow-emerald-500/15 transition-all truncate"
+                  >
+                    <Activity className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">Краш-тест обрыва VPN</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSyncTz()}
+                    disabled={syncingTz}
+                    className="py-2 px-2.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 active:scale-[0.99] border border-white/[0.1] hover:border-white/[0.2] text-zinc-200 text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-all truncate"
+                  >
+                    <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span className="truncate">{syncingTz ? "Синхронизация..." : "Авто-TZ для ИИ"}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 2. Карточка «Что сейчас под защитой» */}
               <div className="bg-[#12141A] rounded-xl border border-white/[0.08] p-3.5 space-y-2.5 shadow-xs">
                 <div className="flex items-center justify-between pb-1.5 border-b border-white/[0.05]">
                   <span className="text-[10px] tracking-wider uppercase text-zinc-400 font-semibold">
                     Что сейчас под защитой
                   </span>
-                  <span className="text-[10px] font-mono text-emerald-400 font-medium">Zero-MITM</span>
+                  <span className="text-[10px] font-mono text-emerald-400 font-medium">Без чтения чатов</span>
                 </div>
 
                 <div className="space-y-2.5 divide-y divide-white/[0.04]">
-                  {/* 1. Браузеры (Chrome, Safari, Arc, Яндекс) */}
+                  {/* 1. Браузеры */}
                   <div className="flex items-center justify-between pt-1 first:pt-0">
                     <div className="flex items-center gap-2.5 min-w-0">
                       <div className="w-7 h-7 rounded-lg bg-zinc-900 border border-white/[0.06] flex items-center justify-center text-zinc-300 shrink-0">
@@ -1469,7 +1382,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                       <div className="min-w-0">
                         <div className="text-xs font-semibold text-white">Браузеры</div>
                         <div className="text-[10px] text-zinc-400 truncate">
-                          Chrome, Safari, Arc, Яндекс (через PAC)
+                          Chrome, Safari, Arc, Edge, Яндекс (через PAC)
                         </div>
                       </div>
                     </div>
@@ -1494,7 +1407,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                     </div>
                   </div>
 
-                  {/* 2. Редакторы кода (VS Code, Cursor, Windsurf, терминал) */}
+                  {/* 2. Редакторы кода */}
                   <div className="flex items-center justify-between pt-2.5">
                     <div className="flex items-center gap-2.5 min-w-0">
                       <div className="w-7 h-7 rounded-lg bg-zinc-900 border border-white/[0.06] flex items-center justify-center text-sky-400 shrink-0">
@@ -1528,7 +1441,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                     </div>
                   </div>
 
-                  {/* 3. Закрепление безопасного IP (Защита от смены сервера) */}
+                  {/* 3. Закрепление безопасного IP */}
                   <div className="flex items-center justify-between pt-2.5">
                     <div className="flex items-center gap-2.5 min-w-0">
                       <div
@@ -1592,6 +1505,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                 </div>
               </div>
 
+              {/* v1.2.0: Claude Multi-Account Sandbox Card */}
+              <ClaudeProfilesCard
+                currentIp={currentIp}
+                currentCountry={currentCountry}
+                onProfileSwitched={(_name, pin) => {
+                  if (pin) {
+                    handlePinIp(pin);
+                  } else {
+                    runFullAudit(false);
+                  }
+                }}
+                onToast={showToast}
+              />
+
               {/* 3. Статус по сервисам (ProviderMatrix) */}
               <ProviderMatrix
                 reports={reports}
@@ -1607,7 +1534,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
 
               {/* 4. Кэш клиентов и перенос контекста Claude */}
               <div className="bg-[#12141A] rounded-xl border border-white/[0.08] p-3 space-y-2.5 shadow-xs">
-                {/* Panel Header (Clickable Accordion) */}
                 <div
                   onClick={handleToggleClaudePanel}
                   className="flex items-center justify-between cursor-pointer group select-none"
@@ -1637,10 +1563,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                   </div>
                 </div>
 
-                {/* Expanded Content */}
                 {claudePanelExpanded && (
                   <div className="pt-2 border-t border-white/[0.06] space-y-3 animate-in fade-in duration-150">
-                    {/* Блок 1: Экспорт локальных данных Claude (~/.claude) */}
+                    {/* Экспорт ~/.claude */}
                     <div className="bg-[#0c0e14] rounded-lg p-2.5 border border-white/[0.06] space-y-2">
                       <div className="flex items-center justify-between">
                         <div className="text-[10.5px] font-semibold text-zinc-200 flex items-center gap-1.5">
@@ -1663,7 +1588,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                         </button>
                       </div>
 
-                      {/* Engineering Summary in Monospace */}
                       <div className="bg-black/50 rounded px-2.5 py-1.5 border border-white/[0.04] text-[9.5px] font-mono tabular-nums text-zinc-300 space-y-1">
                         <div className="flex items-center justify-between flex-wrap gap-x-2 gap-y-0.5">
                           <span>
@@ -1681,16 +1605,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                           </span>
                           <span>·</span>
                           <span>
-                            Файлов памяти:{" "}
+                            Память:{" "}
                             <strong className="text-emerald-300 font-bold">
                               {claudeSummary?.memory_files_count ?? 0}
-                            </strong>
-                          </span>
-                          <span>·</span>
-                          <span>
-                            Планов:{" "}
-                            <strong className="text-emerald-300 font-bold">
-                              {claudeSummary?.plans_count ?? 0}
                             </strong>
                           </span>
                           <span>·</span>
@@ -1701,39 +1618,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                             </strong>
                           </span>
                         </div>
-
-                        {/* Compact Top-3 Projects List */}
-                        {claudeSummary?.projects && claudeSummary.projects.length > 0 && (
-                          <div className="pt-1.5 border-t border-white/[0.04] space-y-1">
-                            <div className="text-[9px] text-zinc-500 uppercase tracking-wider">
-                              Активные проекты:
-                            </div>
-                            {claudeSummary.projects.slice(0, 3).map((p, pIdx) => (
-                              <div
-                                key={pIdx}
-                                className="flex items-center justify-between text-[9px] text-zinc-400 bg-white/[0.02] px-1.5 py-0.5 rounded truncate"
-                              >
-                                <span
-                                  className="truncate text-zinc-300 max-w-[250px]"
-                                  title={p.decoded_path}
-                                >
-                                  {p.decoded_path}
-                                </span>
-                                <div className="flex items-center gap-1.5 shrink-0 ml-1.5 text-zinc-500">
-                                  <span>{p.sessions_count} сессий</span>
-                                  {p.has_memory && (
-                                    <span className="px-1 py-0.2 rounded bg-emerald-500/15 text-emerald-300 text-[8px] font-bold">
-                                      ПАМЯТЬ
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
                       </div>
 
-                      {/* 2 Action Buttons in a row */}
                       <div className="grid grid-cols-2 gap-2 pt-0.5">
                         <button
                           type="button"
@@ -1743,7 +1629,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                         >
                           <FolderArchive className="w-3 h-3 shrink-0" />
                           <span className="truncate">
-                            {claudeExporting ? "Упаковка..." : "Упаковать архив на Рабочий стол"}
+                            {claudeExporting ? "Упаковка..." : "Упаковать архив"}
                           </span>
                         </button>
 
@@ -1756,18 +1642,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                           {copiedPrompt ? (
                             <>
                               <Check className="w-3 h-3 text-emerald-400 shrink-0" />
-                              <span className="text-emerald-300 truncate">Промт скопирован в буфер</span>
+                              <span className="text-emerald-300 truncate">Промт скопирован</span>
                             </>
                           ) : (
                             <>
                               <Copy className="w-3 h-3 text-zinc-400 shrink-0" />
-                              <span className="truncate">Скопировать промт для другого ИИ</span>
+                              <span className="truncate">Скопировать промт</span>
                             </>
                           )}
                         </button>
                       </div>
 
-                      {/* Confirmation box if archive was created */}
                       {claudeExportResult && (
                         <div className="bg-emerald-500/10 border border-emerald-500/25 rounded-md p-2 text-[9.5px] font-mono text-emerald-300 space-y-0.5 animate-in fade-in duration-150">
                           <div className="font-bold flex items-center gap-1">
@@ -1777,27 +1662,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                           <div className="text-zinc-300 truncate">
                             {claudeExportResult.zip_archive_path || claudeExportResult.export_dir_path}
                           </div>
-                          <div className="text-zinc-400 truncate">
-                            Карта: {claudeExportResult.index_summary_path}
-                          </div>
                         </div>
                       )}
-
-                      {/* 1-line note */}
-                      <div className="text-[10px] text-zinc-400 leading-relaxed font-sans px-0.5">
-                        Создает архив всех сессий, транскриптов и памяти + файл INDEX_SUMMARY.md и промт для быстрого продолжения работы в Antigravity, Cursor, Windsurf или новом аккаунте Claude.
-                      </div>
                     </div>
 
-                    {/* Блок 2: Глубокий сброс кэша и меток устройства */}
+                    {/* Сброс кэша Desktop */}
                     <div className="bg-[#0c0e14] rounded-lg p-2.5 border border-white/[0.06] space-y-2">
                       <div className="text-[10.5px] font-semibold text-zinc-200 flex items-center gap-1.5">
                         <span className="w-1.5 h-1.5 rounded-full bg-rose-400 shrink-0" />
                         <span>Глубокий сброс кэша и меток устройства</span>
-                      </div>
-
-                      <div className="text-[10px] text-zinc-400 leading-relaxed font-sans px-0.5">
-                        Удаляет Cookies, Network State и локальные антифрод-реестры Desktop-приложений. Проекты в ~/.claude и настройки MCP (claude_desktop_config.json) не затрагиваются.
                       </div>
 
                       <div className="grid grid-cols-2 gap-2 pt-0.5">
@@ -1809,7 +1682,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                         >
                           <Trash2 className="w-3 h-3 text-rose-400 shrink-0" />
                           <span className="truncate">
-                            {cleaningClaude ? "Очистка..." : "Сброс кэша Claude Desktop"}
+                            {cleaningClaude ? "Очистка..." : "Кэш Claude Desktop"}
                           </span>
                         </button>
 
@@ -1821,7 +1694,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                         >
                           <Trash2 className="w-3 h-3 text-zinc-400 shrink-0" />
                           <span className="truncate">
-                            {cleaningGpt ? "Очистка..." : "Сброс кэша ChatGPT Desktop"}
+                            {cleaningGpt ? "Очистка..." : "Кэш ChatGPT Desktop"}
                           </span>
                         </button>
                       </div>
@@ -1888,6 +1761,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
                   setActiveTab("guide");
                 }}
                 onSimulate={handleSimulate}
+                onPinCurrentIp={handlePinIp}
+                onSyncTimezone={() => handleSyncTz()}
+                onOpenCrashTest={() => setShowCrashTestModal(true)}
               />
             </div>
           )}
@@ -1924,9 +1800,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
 
       {/* Footer */}
       <footer className="mt-3 pt-2 border-t border-white/[0.07] text-[9.5px] text-zinc-500 flex items-center justify-between">
-        <span className="flex items-center gap-1">
-          <CheckCircle2 className="w-3 h-3 text-emerald-500/80" />
-          <span>100% локально · Zero-MITM</span>
+        <span className="flex items-center gap-1.5">
+          <CheckCircle2 className="w-3 h-3 text-emerald-500/80 shrink-0" />
+          <span>100% локально · Без чтения чатов</span>
         </span>
         <div className="flex items-center gap-2.5">
           <button
@@ -1947,13 +1823,120 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSimulateInBrowser }) => 
             type="button"
             onClick={handleOpenSupport}
             className="flex items-center gap-1 text-sky-400/90 hover:text-sky-300 transition-colors font-medium cursor-pointer hover:underline"
-            title="Связь и поддержка в Telegram: @nomadnocode (t.me / telegram.me)"
+            title="Связь и поддержка в Telegram: @nomadnocode"
           >
             <Send className="w-2.5 h-2.5 text-sky-400" />
             <span>@nomadnocode</span>
           </button>
         </div>
       </footer>
+
+      {/* Modals: Settings, Crash-Test, Update, Intercept */}
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        autoUpdateEnabled={autoUpdateEnabled}
+        onToggleAutoUpdate={handleToggleAutoUpdate}
+      />
+
+      <VpnCrashTestModal
+        isOpen={showCrashTestModal}
+        onClose={() => setShowCrashTestModal(false)}
+        onToast={showToast}
+      />
+
+      {/* Update Modal */}
+      {showUpdateModal && updateInfo && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="update-dialog-title"
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 animate-in fade-in duration-150"
+        >
+          <div className="w-full max-w-[348px] bg-[#12141A] border border-white/[0.12] rounded-xl p-3.5 shadow-2xl space-y-2.5 font-sans">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center border ${
+                    updateInfo.update_available
+                      ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400"
+                      : "bg-zinc-900 border-white/[0.08] text-zinc-300"
+                  }`}
+                >
+                  <Download className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 id="update-dialog-title" className="text-xs font-bold text-white">
+                    {updateInfo.update_available
+                      ? `Доступно обновление v${updateInfo.latest_version}`
+                      : "Установлена актуальная версия"}
+                  </h2>
+                  <p className="text-[10px] font-mono text-zinc-400">
+                    Текущая: v{updateInfo.current_version} · Релиз: v{updateInfo.latest_version}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={installingUpdate}
+                onClick={() => setShowUpdateModal(false)}
+                className="p-1 rounded-md text-zinc-400 hover:text-white hover:bg-white/[0.06] cursor-pointer"
+                title="Закрыть"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => openExternal(updateInfo.release_url)}
+                className="px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-white/[0.08] text-[10.5px] text-zinc-300 flex items-center gap-1 cursor-pointer"
+              >
+                <span>GitHub Release</span>
+                <ExternalLink className="w-3 h-3" />
+              </button>
+
+              {updateInfo.update_available ? (
+                <button
+                  type="button"
+                  disabled={installingUpdate}
+                  onClick={handleInstallUpdate}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-zinc-950 font-bold text-[11px] flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>{installingUpdate ? "Обновление..." : "Обновить"}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowUpdateModal(false)}
+                  className="px-3 py-1.5 rounded-lg bg-zinc-100 hover:bg-white text-zinc-950 font-semibold text-[11px] cursor-pointer"
+                >
+                  Понятно
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* In-window Emergency Interception Overlay */}
+      {interceptPayload && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-xs flex items-center justify-center p-2">
+          <div className="scale-[0.78] origin-center">
+            <AlertPopup
+              initialPayload={interceptPayload}
+              onResolved={() => {
+                setInterceptPayload(null);
+                runFullAudit(false);
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
+export default Dashboard;

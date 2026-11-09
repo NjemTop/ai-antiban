@@ -98,6 +98,10 @@ where
     deserializer.deserialize_any(AsnVisitor)
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// Upstream proxy gateway configuration (e.g. SOCKS5 / HTTP tunnel for AI traffic).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UpstreamProxyConfig {
@@ -130,6 +134,8 @@ pub struct AppStateData {
     pub warmup_started_at: Option<u64>,
     #[serde(default)]
     pub synced_ai_timezone: Option<String>,
+    #[serde(default = "default_true")]
+    pub auto_update_enabled: bool,
 }
 
 impl Default for AppStateData {
@@ -148,6 +154,7 @@ impl Default for AppStateData {
             upstream_proxy: None,
             warmup_started_at: None,
             synced_ai_timezone: None,
+            auto_update_enabled: true,
         }
     }
 }
@@ -222,6 +229,10 @@ impl GatewayStatsTracker {
     }
 
     pub fn record_protected(&self, host: &str, provider: &str, country: &str) {
+        // Crash-test canary probes must never inflate real user counters.
+        if host.starts_with("canary-test.") {
+            return;
+        }
         self.protected_ai_requests.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut l) = self.last_protected_host.write() {
             *l = Some(host.to_string());
@@ -238,6 +249,10 @@ impl GatewayStatsTracker {
     }
 
     pub fn record_intercepted(&self, host: &str, provider: &str, action: &str, country: &str) {
+        // Crash-test canary probes must never inflate real user counters.
+        if host.starts_with("canary-test.") {
+            return;
+        }
         self.intercepted_leaks.fetch_add(1, Ordering::SeqCst);
         let event = RecentGatewayEvent {
             timestamp: crate::auditor::network::current_timestamp(),
@@ -470,6 +485,18 @@ impl AppState {
         {
             let mut w = self.inner.write().await;
             w.strict_pinning_enabled = enabled;
+        }
+        self.save_async().await
+    }
+
+    pub async fn is_auto_update_enabled(&self) -> bool {
+        self.inner.read().await.auto_update_enabled
+    }
+
+    pub async fn set_auto_update_enabled(&self, enabled: bool) -> Result<(), StateError> {
+        {
+            let mut w = self.inner.write().await;
+            w.auto_update_enabled = enabled;
         }
         self.save_async().await
     }

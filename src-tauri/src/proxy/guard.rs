@@ -227,6 +227,19 @@ impl NetworkGuard {
         self.gate_tx.send_replace(gate);
     }
 
+    pub async fn freeze_for_test(&self) {
+        self.set_gate(Gate::Blocked);
+        self.abort_active_tunnels();
+        if let Some(ctx) = self.ctx.get() {
+            crate::show_and_position_alert_popup(&ctx.app);
+        }
+    }
+
+    pub async fn verify_before_connect(self: &Arc<Self>) -> bool {
+        self.ensure_fresh().await;
+        self.gate() == Gate::Open
+    }
+
     /// Used by new CONNECT requests: waits for the user's decision while the gate is pending.
     pub async fn await_decision(&self) -> Gate {
         let mut rx = self.gate_tx.subscribe();
@@ -746,13 +759,13 @@ impl NetworkGuard {
         if self.gate() == Gate::Open {
             return;
         }
-        let Some(ip) = inner.observed_ip.clone() else {
-            return;
-        };
         let upstream_opt = ctx.state.get_upstream_proxy().await;
         let active_upstream = upstream_opt.as_ref().filter(|c| c.enabled);
         if let Ok(tel) = ctx.auditor.resolver.resolve_with_upstream(false, active_upstream).await {
+            let ip = inner.observed_ip.clone().unwrap_or_else(|| tel.ip.clone());
             self.accept_locked(ctx, &mut inner, &ip, &tel).await;
+        } else {
+            self.set_gate(Gate::Open);
         }
     }
 

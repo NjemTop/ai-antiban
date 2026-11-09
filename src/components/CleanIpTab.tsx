@@ -213,7 +213,7 @@ export const CleanIpTab: React.FC<CleanIpTabProps> = ({
                 <CheckCircle2 className="w-3 h-3" />
                 <span>Защита сессии активна</span>
               </span>
-              <span className="text-zinc-500">2-Hop Zero-MITM</span>
+              <span className="text-zinc-500">2-Hop · без чтения чатов</span>
             </div>
           </div>
         ) : (

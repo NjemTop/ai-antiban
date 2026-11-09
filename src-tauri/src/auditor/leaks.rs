@@ -90,7 +90,7 @@ pub async fn check_ipv6_leak(ipv4_country: &str, global_blocked: &[String]) -> C
 pub fn check_dns_leak(ipv4_country: &str, russian_keywords: &[String]) -> CheckResult {
     #[cfg(target_os = "macos")]
     {
-        if let Ok(output) = std::process::Command::new("scutil").arg("--dns").output() {
+        if let Ok(output) = crate::sysproxy::silent_command("scutil").arg("--dns").output() {
             let text = String::from_utf8_lossy(&output.stdout);
             for kw in russian_keywords {
                 if text.to_lowercase().contains(&kw.to_lowercase()) {
@@ -114,7 +114,7 @@ pub fn check_dns_leak(ipv4_country: &str, russian_keywords: &[String]) -> CheckR
 
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = std::process::Command::new("ipconfig").arg("/all").output() {
+        if let Ok(output) = crate::sysproxy::silent_command("ipconfig").arg("/all").output() {
             let text = String::from_utf8_lossy(&output.stdout);
             if text.contains("77.88.8.") && ipv4_country != "RU" {
                 return CheckResult::warning(

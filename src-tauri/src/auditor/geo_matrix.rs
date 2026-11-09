@@ -59,7 +59,8 @@ impl ProviderId {
         }
 
         // 1. Anthropic / Claude
-        if host == "claude.ai"
+        if host == "canary-test.anthropic.zastava.local"
+            || host == "claude.ai"
             || host.ends_with(".claude.ai")
             || host == "claude.com"
             || host.ends_with(".claude.com")

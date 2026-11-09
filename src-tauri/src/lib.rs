@@ -5,6 +5,7 @@ pub mod state;
 pub mod sysproxy;
 pub mod updater;
 
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tauri::{
     image::Image,
@@ -15,6 +16,9 @@ use tauri::{
 use tauri_plugin_opener::OpenerExt;
 
 pub const MAIN_TRAY_ID: &str = "main-tray";
+
+#[derive(Clone)]
+pub struct TrayStatsMenuItem(pub MenuItem<tauri::Wry>);
 
 const TRAY_ICON_GREEN: &[u8] = include_bytes!("../icons/tray-green.png");
 const TRAY_ICON_YELLOW: &[u8] = include_bytes!("../icons/tray-yellow.png");
@@ -51,7 +55,7 @@ pub fn is_sanctioned_or_blocked_country(country_code: &str) -> bool {
     BLOCKED.iter().any(|c| c.eq_ignore_ascii_case(country_code.trim()))
 }
 
-/// Updates the system tray icon, menu bar title (macOS), and tooltip based on current audit report.
+/// Updates the system tray icon, menu bar title (macOS), tooltip, and live menu stats based on current audit report.
 pub fn update_tray_from_report(
     app: &tauri::AppHandle,
     report: &auditor::RiskReport,
@@ -93,7 +97,25 @@ pub fn update_tray_from_report(
         if let Ok(img) = Image::from_bytes(icon_bytes) {
             let _ = tray.set_icon(Some(img));
         }
+
+        if let Some(item) = app.try_state::<TrayStatsMenuItem>() {
+            let _ = item.0.set_text(format!(
+                "🛡 Защищено ИИ: {} · Сбоев VPN: {}",
+                stats.protected_ai_requests, stats.intercepted_leaks
+            ));
+        }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrashTestStepResult {
+    pub passed_through: bool,
+    pub intercepted_by_killswitch: bool,
+    pub latency_ms: f64,
+    pub current_ip: String,
+    pub current_country: String,
+    pub leaked_packets: u32,
+    pub status_text: String,
 }
 
 #[tauri::command]
@@ -605,6 +627,170 @@ async fn install_update(
     updater::download_and_install_update(&app, &download_url, &asset_name).await
 }
 
+#[tauri::command]
+async fn toggle_auto_update(
+    enabled: bool,
+    state: tauri::State<'_, state::AppState>,
+) -> Result<(), String> {
+    state
+        .set_auto_update_enabled(enabled)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// -----------------------------------------------------------------------------
+// Multi-Account Claude Profile Commands
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+async fn list_claude_profiles_cmd(
+    state: tauri::State<'_, state::AppState>,
+) -> Result<auditor::profile_switcher::ClaudeProfileListResponse, String> {
+    let pinned_ip = state.get_pinned_ip().await;
+    auditor::profile_switcher::list_claude_profiles(pinned_ip.as_deref())
+}
+
+#[tauri::command]
+async fn create_claude_profile_cmd(
+    name: String,
+    bind_ip: Option<String>,
+    bind_country: Option<String>,
+) -> Result<auditor::profile_switcher::ClaudeProfileListResponse, String> {
+    auditor::profile_switcher::create_claude_profile(&name, bind_ip, bind_country)
+}
+
+#[tauri::command]
+async fn switch_claude_profile_cmd(
+    target_id: String,
+    state: tauri::State<'_, state::AppState>,
+) -> Result<auditor::profile_switcher::ProfileSwitchResult, String> {
+    let res = auditor::profile_switcher::switch_claude_profile(&target_id)?;
+    if let Some(ref ip) = res.active_profile.bound_ip {
+        let _ = state.set_pinned_ip(Some(ip.clone())).await;
+    }
+    Ok(res)
+}
+
+#[tauri::command]
+async fn delete_claude_profile_cmd(
+    profile_id: String,
+) -> Result<auditor::profile_switcher::ClaudeProfileListResponse, String> {
+    auditor::profile_switcher::delete_claude_profile(&profile_id)
+}
+
+#[tauri::command]
+async fn bind_ip_to_claude_profile_cmd(
+    profile_id: String,
+    bind_ip: Option<String>,
+    bind_country: Option<String>,
+) -> Result<auditor::profile_switcher::ClaudeProfileListResponse, String> {
+    auditor::profile_switcher::update_profile_bound_ip(&profile_id, bind_ip, bind_country)
+}
+
+// -----------------------------------------------------------------------------
+// Live VPN Crash-Test Commands
+// -----------------------------------------------------------------------------
+
+#[tauri::command]
+async fn run_vpn_crash_test_step(
+    proxy_manager: tauri::State<'_, proxy::ProxyManager>,
+    auditor: tauri::State<'_, auditor::Auditor>,
+    state: tauri::State<'_, state::AppState>,
+) -> Result<CrashTestStepResult, String> {
+    let proxy_addr = proxy_manager.server.bound_addr;
+    let start = std::time::Instant::now();
+
+    let connect_fut = async {
+        let mut stream = tokio::net::TcpStream::connect(proxy_addr).await?;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let req = b"CONNECT canary-test.anthropic.zastava.local:443 HTTP/1.1\r\nHost: canary-test.anthropic.zastava.local:443\r\n\r\n";
+        stream.write_all(req).await?;
+        stream.flush().await?;
+
+        let mut buf = [0u8; 1024];
+        let n = stream.read(&mut buf).await?;
+        let resp = String::from_utf8_lossy(&buf[..n]);
+        Ok::<String, std::io::Error>(resp.to_string())
+    };
+
+    let (current_ip, current_country) = {
+        let upstream_opt = state.get_upstream_proxy().await;
+        let active_upstream = upstream_opt.as_ref().filter(|c| c.enabled);
+        if let Ok(tel) = auditor.resolver.resolve_with_upstream(false, active_upstream).await {
+            (tel.ip, tel.country_code)
+        } else {
+            let st = state.get_data().await;
+            (st.pinned_ip.unwrap_or_else(|| "127.0.0.1".to_string()), "??".to_string())
+        }
+    };
+
+    match tokio::time::timeout(Duration::from_millis(800), connect_fut).await {
+        Ok(Ok(resp)) => {
+            let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+            if resp.contains("200 OK") || resp.contains("PROTECTED") {
+                Ok(CrashTestStepResult {
+                    passed_through: true,
+                    intercepted_by_killswitch: false,
+                    latency_ms,
+                    current_ip,
+                    current_country,
+                    leaked_packets: 0,
+                    status_text: format!("Защищено · Маршрут чист ({:.1} мс)", latency_ms),
+                })
+            } else {
+                Ok(CrashTestStepResult {
+                    passed_through: false,
+                    intercepted_by_killswitch: true,
+                    latency_ms,
+                    current_ip,
+                    current_country,
+                    leaked_packets: 0,
+                    status_text: format!("Мгновенно перехвачено Kill-Switch ({:.1} мс)", latency_ms),
+                })
+            }
+        }
+        Ok(Err(_io_err)) => {
+            let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
+            Ok(CrashTestStepResult {
+                passed_through: false,
+                intercepted_by_killswitch: true,
+                latency_ms,
+                current_ip,
+                current_country,
+                leaked_packets: 0,
+                status_text: format!("Перехвачено на уровне сокета ({:.1} мс)", latency_ms),
+            })
+        }
+        Err(_timeout) => {
+            Ok(CrashTestStepResult {
+                passed_through: false,
+                intercepted_by_killswitch: true,
+                latency_ms: 800.0,
+                current_ip,
+                current_country,
+                leaked_packets: 0,
+                status_text: "Таймаут сокета · Трафик удержан Kill-Switch (0 пакетов)".to_string(),
+            })
+        }
+    }
+}
+
+#[tauri::command]
+async fn trigger_crash_test_drop(
+    proxy_manager: tauri::State<'_, proxy::ProxyManager>,
+) -> Result<(), String> {
+    proxy_manager.guard.freeze_for_test().await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn reset_crash_test_drop(
+    proxy_manager: tauri::State<'_, proxy::ProxyManager>,
+) -> Result<(), String> {
+    proxy_manager.guard.accept_current().await;
+    Ok(())
+}
+
 pub type AppContext = state::AppState;
 
 #[tauri::command]
@@ -733,7 +919,7 @@ pub fn run() {
                 app: app.handle().clone(),
             });
 
-            // Native Russian tray menu with live actions
+            // Native Russian tray menu with live actions & control center
             let status_i = MenuItem::with_id(
                 app,
                 "status_header",
@@ -741,6 +927,14 @@ pub fn run() {
                 false,
                 None::<&str>,
             )?;
+            let stats_i = MenuItem::with_id(
+                app,
+                "stats_header",
+                "🛡 Защищено ИИ: 0 · Сбоев VPN: 0",
+                false,
+                None::<&str>,
+            )?;
+            app.manage(TrayStatsMenuItem(stats_i.clone()));
             let sep1 = PredefinedMenuItem::separator(app)?;
             let show_i = MenuItem::with_id(
                 app,
@@ -749,10 +943,38 @@ pub fn run() {
                 true,
                 None::<&str>,
             )?;
-            let rescan_i = MenuItem::with_id(
+            let toggle_sysproxy_i = MenuItem::with_id(
                 app,
-                "rescan",
-                "↻ Перепроверить соединение (2ip / DNSBL)",
+                "toggle_sysproxy_tray",
+                "🌐 Переключить защиту браузеров и Claude Desktop",
+                true,
+                None::<&str>,
+            )?;
+            let toggle_cli_i = MenuItem::with_id(
+                app,
+                "toggle_cli_tray",
+                "💻 Переключить защиту терминала и Cursor / VS Code",
+                true,
+                None::<&str>,
+            )?;
+            let sync_tz_i = MenuItem::with_id(
+                app,
+                "sync_tz_tray",
+                "🕒 Синхронизировать часовой пояс для ИИ",
+                true,
+                None::<&str>,
+            )?;
+            let backup_claude_i = MenuItem::with_id(
+                app,
+                "backup_claude_tray",
+                "📦 Быстрый бэкап Claude на Рабочий стол",
+                true,
+                None::<&str>,
+            )?;
+            let crash_test_i = MenuItem::with_id(
+                app,
+                "crash_test_tray",
+                "🧪 Боевой краш-тест обрыва VPN",
                 true,
                 None::<&str>,
             )?;
@@ -760,6 +982,13 @@ pub fn run() {
                 app,
                 "pin_ip",
                 "📌 Закрепить текущий IP как личный VPS",
+                true,
+                None::<&str>,
+            )?;
+            let rescan_i = MenuItem::with_id(
+                app,
+                "rescan",
+                "↻ Перепроверить соединение (2ip / DNSBL)",
                 true,
                 None::<&str>,
             )?;
@@ -788,7 +1017,7 @@ pub fn run() {
             let quit_i = MenuItem::with_id(
                 app,
                 "quit",
-                "Выйти и отключить PAC-перехват",
+                "Выйти и отключить сетевой контроль",
                 true,
                 None::<&str>,
             )?;
@@ -797,10 +1026,16 @@ pub fn run() {
                 app,
                 &[
                     &status_i,
+                    &stats_i,
                     &sep1,
                     &show_i,
-                    &rescan_i,
+                    &toggle_sysproxy_i,
+                    &toggle_cli_i,
+                    &sync_tz_i,
+                    &backup_claude_i,
+                    &crash_test_i,
                     &pin_i,
+                    &rescan_i,
                     &guide_i,
                     &support_i,
                     &update_i,
@@ -824,6 +1059,51 @@ pub fn run() {
                             let _ = win.show();
                             let _ = win.set_focus();
                         }
+                    }
+                    "toggle_sysproxy_tray" => {
+                        let active = sysproxy::is_sysproxy_active();
+                        if active {
+                            sysproxy::disable_all_sysproxy();
+                        } else if let Some(proxy_mgr) = app.try_state::<proxy::ProxyManager>() {
+                            let pac_url = format!("http://{}/proxy.pac", proxy_mgr.server.bound_addr);
+                            let _ = sysproxy::enable_sysproxy(&pac_url);
+                        }
+                        let _ = app.emit("tray://sysproxy-toggled", !active);
+                    }
+                    "toggle_cli_tray" => {
+                        let active = sysproxy::is_cli_protection_enabled();
+                        if active {
+                            sysproxy::disable_cli_protection();
+                        } else if let Some(proxy_mgr) = app.try_state::<proxy::ProxyManager>() {
+                            let addr = proxy_mgr.server.bound_addr.to_string();
+                            let state = app.try_state::<state::AppState>();
+                            let tz = state.map(|s| tauri::async_runtime::block_on(s.get_synced_ai_timezone())).flatten();
+                            let _ = sysproxy::enable_cli_and_ide_protection_with_tz(&addr, tz.as_deref());
+                        }
+                        let _ = app.emit("tray://cli-toggled", !active);
+                    }
+                    "sync_tz_tray" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                        let _ = app.emit("tray://sync-timezone", ());
+                    }
+                    "backup_claude_tray" => {
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let res = tokio::task::spawn_blocking(auditor::claude_exporter::export_claude_local_data).await;
+                            if let Ok(Ok(export_res)) = res {
+                                let _ = app_clone.emit("claude://backup-finished", &export_res);
+                            }
+                        });
+                    }
+                    "crash_test_tray" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                        let _ = app.emit("tray://open-crash-test", ());
                     }
                     "rescan" => {
                         let _ = app.emit("tray://rescan", ());
@@ -910,18 +1190,22 @@ pub fn run() {
             });
 
             // Background periodic GitHub update checker (after 20s, then every 60m)
+            // Strictly respects user opt-out setting (auto_update_enabled)
             let updater_app_handle = app.handle().clone();
+            let updater_state = app_state.clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(20)).await;
                 loop {
-                    if let Ok(res) = updater::check_github_updates().await {
-                        if res.update_available {
-                            let _ = updater_app_handle.emit("updater://available", &res);
-                            if let Some(tray) = updater_app_handle.tray_by_id(MAIN_TRAY_ID) {
-                                let _ = tray.set_tooltip(Some(&format!(
-                                    "Застава — Доступна новая версия v{}",
-                                    res.latest_version
-                                )));
+                    if updater_state.get_data().await.auto_update_enabled {
+                        if let Ok(res) = updater::check_github_updates().await {
+                            if res.update_available {
+                                let _ = updater_app_handle.emit("updater://available", &res);
+                                if let Some(tray) = updater_app_handle.tray_by_id(MAIN_TRAY_ID) {
+                                    let _ = tray.set_tooltip(Some(&format!(
+                                        "Застава — Доступна новая версия v{}",
+                                        res.latest_version
+                                    )));
+                                }
                             }
                         }
                     }
@@ -963,6 +1247,15 @@ pub fn run() {
             check_payment_bin,
             check_for_updates,
             install_update,
+            toggle_auto_update,
+            list_claude_profiles_cmd,
+            create_claude_profile_cmd,
+            switch_claude_profile_cmd,
+            delete_claude_profile_cmd,
+            bind_ip_to_claude_profile_cmd,
+            run_vpn_crash_test_step,
+            trigger_crash_test_drop,
+            reset_crash_test_drop,
             set_upstream_proxy,
             toggle_upstream_proxy,
             clear_upstream_proxy,

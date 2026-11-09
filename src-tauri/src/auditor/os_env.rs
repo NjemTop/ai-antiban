@@ -138,7 +138,7 @@ pub fn evaluate_locale_env_hygiene(synced_ai_tz: Option<&str>) -> CheckResult {
 pub fn check_os_location_services() -> CheckResult {
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = std::process::Command::new("reg")
+        if let Ok(output) = crate::sysproxy::silent_command("reg")
             .args([
                 "query",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location",

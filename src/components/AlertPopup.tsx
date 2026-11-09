@@ -146,7 +146,6 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
   useEffect(() => {
     if (secondsRemaining <= 0) {
       if (isDemo) {
-        // Safe timeout closure in simulation mode
         resolveInterception(
           payload.id,
           "BlockUntilNetworkChange",
@@ -290,7 +289,7 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
         </div>
       </div>
 
-      {/* 2. Visual Route Change Pill (Crystal clear, zero jargon) */}
+      {/* 2. Visual Route Change Pill */}
       <div className="space-y-1.5">
         <div className="bg-[#11131c]/90 rounded-xl px-3 py-1.5 border border-white/[0.08] flex items-center justify-between text-[11px] font-mono shadow-inner">
           {previousIp ? (
@@ -331,7 +330,6 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
           )}
         </div>
 
-        {/* Human-Friendly Explanation or Demo Status Message */}
         {demoFeedback ? (
           <div className="p-2 rounded-xl bg-sky-950/70 border border-sky-500/40 text-center animate-in fade-in duration-150">
             <div className="text-[10.5px] font-medium text-sky-200 leading-tight">
@@ -345,9 +343,8 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
         )}
       </div>
 
-      {/* 3. 3 Clean Action Buttons (keyboard shortcuts 1, 2, 3) */}
+      {/* 3. Action Buttons */}
       <div className="space-y-1.5 pt-0.5">
-        {/* Full-width primary button (1) */}
         <button
           type="button"
           disabled={resolving || Boolean(demoFeedback)}
@@ -363,9 +360,7 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
           </span>
         </button>
 
-        {/* Two bottom buttons side-by-side (3 & 2) */}
         <div className="grid grid-cols-2 gap-2">
-          {/* Button 3: Drop / Block */}
           <button
             type="button"
             disabled={resolving || Boolean(demoFeedback)}
@@ -376,7 +371,6 @@ export const AlertPopup: React.FC<AlertPopupProps> = ({
             <span className="truncate">3. Блокировать до VPN</span>
           </button>
 
-          {/* Button 2: Allow */}
           <button
             type="button"
             disabled={resolving || Boolean(demoFeedback)}
